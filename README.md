@@ -38,6 +38,8 @@ The current casing can be 3D printed using the STLs in the 3d-prints folder. I h
 1. Solder the following components onto the PCB:
     - 7-pin headers
     - 4-pin headers
+        - Use the horizontal 4-pin header marked temperature if the AHT30 is to be used.
+        - Use the vertical 4-pin header marked barometer if the BME280 is to be used.
     - 2-pin screw terminal
     - JST-PH female SMD connector
     - HW390 moisture sensor
@@ -55,3 +57,17 @@ The current casing can be 3D printed using the STLs in the 3d-prints folder. I h
 4. Mount the AHT30/BME280 and the BH1750 to the 4-pin headers. The PCB is now ready.
 
 ![image](docs/images/assembled-device.jpg)
+
+5. The battery goes into the bottom of the case. Connect it to the PCB and slide the PCB in. Finally close the lid and install the device in a plant pot.
+
+![image](docs/images/torsken.jpg)
+
+## Understanding the blinking
+The onboard LED on the XIAO ESP32-C6 will blink with the following patterns:
+
+- Slow blinking for 3 seconds
+    - Occurs when the device is connecting to the Zigbee Network
+- Slow blinking for 10 seconds
+    - Occurs when the boot button was pressed and is kept pressed after the Zigbee Connect. This will result in a Zigbee Factory Reset.
+- Fast blinking for 45 seconds
+    - Occurs the first 2 boots, to give the devices time to complete the interview procedure
