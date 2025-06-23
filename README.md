@@ -2,6 +2,21 @@
 
 This repository contains a project for creating a Zigbee Plant Sensor end device. The end goal is to create an energy efficient, battery powered solution for monitoring house plants. The device should be battery powered, and ideally last 2 months on a 1200 mAh battery.
 
+When installed and powered, the device will report:
+
+- Soil Moisture
+- Illuminance
+- Ambient Temperature
+- Ambient Humidity
+- Remaining Battery
+
+The project is tested and developed for integrating with Zigbee2MQTT and Home Assistant.
+
+![image](docs/images/homeassistant.png)
+
+![image](docs/images/z2m-exposes.png)
+
+
 ## Electrical Hardware
 The current version of the device uses the following components:
 
