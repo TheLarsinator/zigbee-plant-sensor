@@ -13,7 +13,7 @@
 #define BATTERY_VOLTAGE_ENDPOINT_NUMBER 12
 
 #define uS_TO_S_FACTOR 1000000ULL /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  596
+#define TIME_TO_SLEEP  897
 
 #define BATTERY_PIN A0
 #define SOIL_PIN A1
@@ -21,7 +21,7 @@
 #define SLOW_BLINK_SPEED 500
 #define FAST_BLINK_SPEED 250
 
-#define BOOT_DELAY 3000
+#define BOOT_DELAY 2800
 #define PAIRING_DELAY 30000
 #define TRANSMISSION_DELAY 100
 
@@ -75,7 +75,6 @@ void measureAndReportBatteryPercentage()
 
   // Report.
   zbTempSensor.reportBatteryPercentage();
-  delay(TRANSMISSION_DELAY);
 }
 
 void measureAndReportSoilMoisture()
@@ -93,7 +92,6 @@ void measureAndReportSoilMoisture()
 
   // Report.
   zbSoilMoistureSensor.reportAnalogInput();
-  delay(TRANSMISSION_DELAY);
 }
 
 void measureAndReportIlluminance()
@@ -107,7 +105,6 @@ void measureAndReportIlluminance()
 
   // Report.
   zbIlluminanceSensor.report();
-  delay(TRANSMISSION_DELAY);
 }
 
 void measureAndReportTemperatureAndHumidity()
@@ -122,7 +119,6 @@ void measureAndReportTemperatureAndHumidity()
 
   // Report.
   zbTempSensor.report();
-  delay(TRANSMISSION_DELAY);
 }
 
 /********************* Arduino functions **************************/
@@ -245,6 +241,9 @@ void loop() {
   measureAndReportIlluminance();
   measureAndReportSoilMoisture();
   measureAndReportBatteryPercentage();
+
+  // Small delay to allow all reporting to finish.
+  delay(TRANSMISSION_DELAY);
 
   goToSleep();
 }
