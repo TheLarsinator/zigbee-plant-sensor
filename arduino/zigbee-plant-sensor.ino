@@ -67,8 +67,8 @@ void measureAndReportBatteryPercentage()
   for(int i = 0; i < 16; i++) {
     batteryVoltages += analogReadMilliVolts(BATTERY_PIN);
   }
-  float batteryVoltage = 2 * batteryVoltages / 16 / 1000.0;
-  float batteryPercentage = ((batteryVoltage - 2.8) * 100) / (4.04 - 2.8);
+  float batteryVoltage = 2 * batteryVoltages / 16;
+  float batteryPercentage = getBatteryPercentage(batteryVoltage);
 
   // Update.
   zbTempSensor.setBatteryPercentage(batteryPercentage);
@@ -119,6 +119,37 @@ void measureAndReportTemperatureAndHumidity()
 
   // Report.
   zbTempSensor.report();
+}
+
+float getBatteryPercentage(int milliVolts) {
+  // Model taken from: https://github.com/def1149/ESP32_Stuff/blob/main/Lipo_Battery_Pct_Capacity
+  #define FULL 4200   // >= FULL 100%
+  #define EMPTY 3499  // < EMPTY 0%
+  float percentage;
+
+  if( milliVolts >= FULL) {
+    percentage = 100.0;
+  } 
+  else if( milliVolts >= 3880) {
+    percentage = map(milliVolts,3880,FULL-1,600,999)/10.0;
+  } 
+  else if (milliVolts >= 3750) {
+    percentage = map(milliVolts,3750,3879,202,599)/10.0;
+  }
+  else if ( milliVolts >= 3700 ) {
+    percentage = map(milliVolts,3700,3749,79,201)/10.0;
+  }
+  else if (milliVolts >= 3610 ) {
+    percentage = map(milliVolts,3610,3699,20,78)/10.0;
+  }
+  else if (milliVolts >= EMPTY) {
+    percentage = map(milliVolts,EMPTY,3609,1,19)/10.0;
+  }
+  else {
+    percentage = 0.0;
+  }
+
+  return percentage;
 }
 
 /********************* Arduino functions **************************/
