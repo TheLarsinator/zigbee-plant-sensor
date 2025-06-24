@@ -127,16 +127,16 @@ float getBatteryPercentage(int milliVolts) {
   #define EMPTY 3499  // < EMPTY 0%
   float percentage;
 
-  if( milliVolts >= FULL) {
+  if (milliVolts >= FULL) {
     percentage = 100.0;
   } 
-  else if( milliVolts >= 3880) {
+  else if (milliVolts >= 3880) {
     percentage = map(milliVolts,3880,FULL-1,600,999)/10.0;
   } 
   else if (milliVolts >= 3750) {
     percentage = map(milliVolts,3750,3879,202,599)/10.0;
   }
-  else if ( milliVolts >= 3700 ) {
+  else if (milliVolts >= 3700 ) {
     percentage = map(milliVolts,3700,3749,79,201)/10.0;
   }
   else if (milliVolts >= 3610 ) {
