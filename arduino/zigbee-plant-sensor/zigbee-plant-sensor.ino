@@ -40,6 +40,8 @@ ZigbeeAnalog zbSoilMoistureSensor = ZigbeeAnalog(MOISTURE_SENSOR_ENDPOINT_NUMBER
 ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
 
 RTC_DATA_ATTR int bootCount = 0;
+RTC_DATA_ATTR int lastBatteryPercentage = 0;
+RTC_DATA_ATTR int lastSoilMoisturePercentage = 0;
 
 void blinkAndWait(int delayMillis, long speed)
 {
@@ -60,16 +62,20 @@ void goToSleep()
   esp_deep_sleep_start();
 }
 
-void measureAndReportBatteryPercentage()
+int measureBatteryPercentage()
 {
-  // Measure.
+  // Measure 16 times and take the average.
   uint32_t batteryVoltages = 0;
   for(int i = 0; i < 16; i++) {
     batteryVoltages += analogReadMilliVolts(BATTERY_PIN);
   }
   float batteryVoltage = 2 * batteryVoltages / 16;
   float batteryPercentage = getBatteryPercentage(batteryVoltage);
+  return roundPercentageDown(batteryPercentage, 10);
+}
 
+void reportBatteryPercentage(float batteryPercentage)
+{
   // Update.
   zbTempSensor.setBatteryPercentage(batteryPercentage);
 
@@ -77,42 +83,54 @@ void measureAndReportBatteryPercentage()
   zbTempSensor.reportBatteryPercentage();
 }
 
-void measureAndReportSoilMoisture()
+float measureSoilMoisture()
 {
-  // Measure.
-  uint32_t moistureReadings = 0;
-  for(int i = 0; i < 16; i++) {
-    moistureReadings += analogRead(SOIL_PIN); // Read and accumulate ADC voltage
-  }
-  float moistureReading = moistureReadings / 16;
-  float soil_moisture_percentage = (1 -((moistureReading - soil_moisture_lower_limit) / (soil_moisture_upper_limit - soil_moisture_lower_limit))) * 100;
-  int soil_moisture_percentage_scaled = soil_moisture_percentage * 10;
+    // Measure 16 times and take the average.
+    uint32_t moistureReadings = 0;
+    for(int i = 0; i < 16; i++) {
+      moistureReadings += analogRead(SOIL_PIN); // Read and accumulate ADC voltage
+    }
+    float moistureReading = moistureReadings / 16;
+    // We assume the HW390 behaves linearly between the lower and upper limit.
+    float moisturePercentage = (1 -((moistureReading - soil_moisture_lower_limit) / (soil_moisture_upper_limit - soil_moisture_lower_limit))) * 100;
+
+    return roundPercentageDown(moisturePercentage, 5);
+}
+
+void reportSoilMoisture(float soilMoisturePercentage)
+{
   // Update.
-  zbSoilMoistureSensor.setAnalogInput(soil_moisture_percentage_scaled);
+  int soilMoisturePercentageScaled = soilMoisturePercentage * 10;
+  zbSoilMoistureSensor.setAnalogInput(soilMoisturePercentageScaled);
 
   // Report.
   zbSoilMoistureSensor.reportAnalogInput();
 }
 
-void measureAndReportIlluminance()
+int measureIlluminance()
 {
-  // Measure.
-  int illuminance = light_sensor.readLightLevel();
-  int zigbee_illuminance = 10000 * log10(illuminance);
+  return light_sensor.readLightLevel();
+}
 
+void reportIlluminance(int illuminance)
+{
   // Update.
+  int zigbee_illuminance = 10000 * log10(illuminance);
   zbIlluminanceSensor.setIlluminance(zigbee_illuminance);
 
   // Report.
   zbIlluminanceSensor.report();
 }
 
-void measureAndReportTemperatureAndHumidity()
+void measureTemperatureAndHumidity(float* temperature, float* humidity)
 {
   // Measure.
-  float temperature =  aht20.getTemperature();
-  float humidity = aht20.getHumidity();
+  *temperature =  aht20.getTemperature();
+  *humidity = aht20.getHumidity();
+}
 
+void reportTemperatureAndHumidity(float temperature, float humidity)
+{
   // Update.
   zbTempSensor.setTemperature(temperature);
   zbTempSensor.setHumidity(humidity);
@@ -152,6 +170,74 @@ float getBatteryPercentage(int milliVolts) {
   return percentage;
 }
 
+int roundPercentageDown(int percentage, int remainder)
+{
+  return percentage - (percentage % remainder);
+}
+
+void configureZigbeeStack()
+{
+  // Set Zigbee device name and model
+  zbTempSensor.setManufacturerAndModel("LarsvdLee", "SleepyPlantSensor");
+
+  // Set minimum and maximum temperature measurement value.
+  zbTempSensor.setMinMaxValue(10, 50);
+
+  // Set tolerance for temperature measurement in °C (lowest possible value is 0.01°C)
+  zbTempSensor.setTolerance(1);
+
+  // Set power source to battery and set battery percentage to the last measured value.
+  zbTempSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY, lastBatteryPercentage);
+
+  // Add humidity cluster to the temperature sensor device with min, max and tolerance values
+  zbTempSensor.addHumiditySensor(0, 100, 1);
+
+  // Set minimum and maximum for raw illuminance value (0 min and 50000 max equals to 0 lux - 100,000 lux)
+  zbIlluminanceSensor.setMinMaxValue(0, 50000);
+
+  // Set tolerance for raw illuminance value
+  zbIlluminanceSensor.setTolerance(1);
+
+  // Setup the analog device.
+  zbSoilMoistureSensor.addAnalogInput();
+  analogReadResolution(12);
+
+  // Add endpoints to Zigbee Core
+  Zigbee.addEndpoint(&zbIlluminanceSensor);
+  Zigbee.addEndpoint(&zbTempSensor);
+  Zigbee.addEndpoint(&zbSoilMoistureSensor);
+
+  // For battery powered devices, it can be better to set timeout for Zigbee Begin to lower value to save battery
+  // If the timeout has been reached, the network channel mask will be reset and the device will try to connect again after reset (scanning all channels)
+  Zigbee.setTimeout(10000);  // Set timeout for Zigbee Begin to 10s (default is 30s)
+}
+
+void startZigbee()
+{
+  // Create a custom Zigbee configuration for End Device with keep alive 10s to avoid interference with reporting data
+  esp_zb_cfg_t zigbeeConfig = ZIGBEE_DEFAULT_ED_CONFIG();
+  zigbeeConfig.nwk_cfg.zed_cfg.keep_alive = 20000;
+
+  // When all EPs are registered, start Zigbee in End Device mode
+  if (!Zigbee.begin(&zigbeeConfig, false)) {
+    Serial.println("Zigbee failed to start!");
+    Serial.println("Rebooting...");
+    ESP.restart();  // If Zigbee failed to start, reboot the device and try again
+  }
+  Serial.println("Connecting to network");
+  while (!Zigbee.connected()) {
+    Serial.print(".");
+    delay(100);
+  }
+  Serial.println();
+  Serial.println("Successfully connected to Zigbee network");
+
+  zbTempSensor.setReporting(120, 120, 10);
+  zbTempSensor.setHumidityReporting(120,120,10);
+  zbIlluminanceSensor.setReporting(120, 120, 10);
+  zbSoilMoistureSensor.setAnalogInputReporting(120, 120, 10);
+}
+
 /********************* Arduino functions **************************/
 void setup() {
   Serial.begin(115200);
@@ -176,63 +262,8 @@ void setup() {
     Serial.println("AHT20 not detected. Please check wiring.");
   }
 
-  // Optional: set Zigbee device name and model
-  zbTempSensor.setManufacturerAndModel("LarsvdLee", "SleepyPlantSensor");
-
-  // Set minimum and maximum temperature measurement value (10-50°C is default range for chip temperature measurement)
-  zbTempSensor.setMinMaxValue(10, 50);
-
-  // Set tolerance for temperature measurement in °C (lowest possible value is 0.01°C)
-  zbTempSensor.setTolerance(1);
-
-  // Set power source to battery and set battery percentage to measured value (now 100% for demonstration)
-  // The value can be also updated by calling zbTempSensor.setBatteryPercentage(percentage) anytime
-  zbTempSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY, 100);
-
-  // Add humidity cluster to the temperature sensor device with min, max and tolerance values
-  zbTempSensor.addHumiditySensor(0, 100, 1);
-
-  // Set minimum and maximum for raw illuminance value (0 min and 50000 max equals to 0 lux - 100,000 lux)
-  zbIlluminanceSensor.setMinMaxValue(0, 50000);
-
-  // Optional: Set tolerance for raw illuminance value
-  zbIlluminanceSensor.setTolerance(1);
-
-  // Setup the analog device.
-  zbSoilMoistureSensor.addAnalogInput();
-  analogReadResolution(12);
-
-  // Add endpoint to Zigbee Core
-  Zigbee.addEndpoint(&zbIlluminanceSensor);
-  Zigbee.addEndpoint(&zbTempSensor);
-  Zigbee.addEndpoint(&zbSoilMoistureSensor);
-
-  // Create a custom Zigbee configuration for End Device with keep alive 10s to avoid interference with reporting data
-  esp_zb_cfg_t zigbeeConfig = ZIGBEE_DEFAULT_ED_CONFIG();
-  zigbeeConfig.nwk_cfg.zed_cfg.keep_alive = 20000;
-
-  // For battery powered devices, it can be better to set timeout for Zigbee Begin to lower value to save battery
-  // If the timeout has been reached, the network channel mask will be reset and the device will try to connect again after reset (scanning all channels)
-  Zigbee.setTimeout(10000);  // Set timeout for Zigbee Begin to 10s (default is 30s)
-
-  // When all EPs are registered, start Zigbee in End Device mode
-  if (!Zigbee.begin(&zigbeeConfig, false)) {
-    Serial.println("Zigbee failed to start!");
-    Serial.println("Rebooting...");
-    ESP.restart();  // If Zigbee failed to start, reboot the device and try again
-  }
-  Serial.println("Connecting to network");
-  while (!Zigbee.connected()) {
-    Serial.print(".");
-    delay(100);
-  }
-  Serial.println();
-  Serial.println("Successfully connected to Zigbee network");
-
-  zbTempSensor.setReporting(120, 120, 10);
-  zbTempSensor.setHumidityReporting(120,120,10);
-  zbIlluminanceSensor.setReporting(120, 120, 10);
-  zbSoilMoistureSensor.setAnalogInputReporting(120, 120, 10);
+  configureZigbeeStack();
+  startZigbee();
 }
 
 void loop() {
@@ -268,10 +299,27 @@ void loop() {
     blinkAndWait(PAIRING_DELAY, FAST_BLINK_SPEED);
   }
 
-  measureAndReportTemperatureAndHumidity();
-  measureAndReportIlluminance();
-  measureAndReportSoilMoisture();
-  measureAndReportBatteryPercentage();
+  int batteryPercentage = measureBatteryPercentage();
+
+  if (batteryPercentage != lastBatteryPercentage)
+  {
+    lastBatteryPercentage = batteryPercentage;
+    reportBatteryPercentage(batteryPercentage);
+  }
+
+  int illuminance = measureIlluminance();
+  reportIlluminance(illuminance);
+
+  float soilMoisture = measureSoilMoisture();
+  if (soilMoisture != lastSoilMoisturePercentage)
+  {
+    lastSoilMoisturePercentage = soilMoisture;
+    reportSoilMoisture(soilMoisture);
+  }
+
+  float temperature, humidity;
+  measureTemperatureAndHumidity(&temperature, &humidity);
+  reportTemperatureAndHumidity(temperature, humidity);
 
   // Small delay to allow all reporting to finish.
   delay(TRANSMISSION_DELAY);
