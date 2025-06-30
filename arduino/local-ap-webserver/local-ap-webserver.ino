@@ -30,8 +30,6 @@ int storedCount = 0;
 
 unsigned long lastMeasurementMillis = 0;
 const unsigned long measurementInterval = 3600000; // 1 hour = 3600000 ms
-// For demo, set lower interval (e.g. 10 sec)
-const unsigned long demoInterval = 10000; 
 
 void setup() {
   Serial.begin(115200);
@@ -61,9 +59,8 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  // For demo: use demoInterval (10 sec); replace with measurementInterval in production
   unsigned long now = millis();
-  if (now - lastMeasurementMillis >= demoInterval) {
+  if (now - lastMeasurementMillis >= measurementInterval) {
     lastMeasurementMillis = now;
     takeMeasurement();
   }

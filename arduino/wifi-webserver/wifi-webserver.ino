@@ -235,7 +235,7 @@ unsigned long lastMeasureTime = 0;
 void loop() {
   server.handleClient();
 
-  if (millis() - lastMeasureTime > 10000UL || lastMeasureTime == 0) {  // every 1 hour
+  if (millis() - lastMeasureTime > 3600000UL || lastMeasureTime == 0) {  // every 1 hour
     lastMeasureTime = millis();
     float temp = aht.getTemperature();
     float hum = aht.getHumidity();
