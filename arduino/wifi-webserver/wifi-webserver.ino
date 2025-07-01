@@ -69,129 +69,338 @@ String getChartData() {
 }
 
 void handleRoot() {
-  String html = R"rawliteral(
-  <!DOCTYPE html><html lang="en"><head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sensor Charts</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-      * { box-sizing: border-box; }
-      body {
-        font-family: sans-serif;
-        margin: 0;
-        padding: 20px;
-        background: #f9f9f9;
-      }
-      h2 { text-align: center; margin-bottom: 20px; }
+  server.send_P(200, "text/html", R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Plant Sensor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: sans-serif;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
 
-      .tabs {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 10px;
-        margin-bottom: 10px;
-      }
+    header {
+      background: #2e7d32;
+      color: white;
+      padding: 1em;
+      text-align: center;
+      font-size: 1.5em;
+    }
 
-      .tab {
-        padding: 10px 15px;
-        background: #e0e0e0;
-        border-radius: 5px;
-        cursor: pointer;
-        transition: background 0.2s;
-      }
+    nav {
+      display: flex;
+      background: #c8e6c9;
+      justify-content: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    }
 
-      .tab.active {
-        background: #007bff;
-        color: white;
-      }
+    nav button {
+      padding: 1.2em 2em;
+      margin: 0.4em;
+      border: none;
+      background: transparent;
+      font-size: 1.5em;
+      font-weight: 600;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
 
-      .chart-container {
-        display: none;
-        width: 100%;
-        max-width: 800px;
-        margin: auto;
-        background: white;
-        padding: 10px;
-        border-radius: 10px;
-        box-shadow: 0 0 10px rgba(0,0,0,0.05);
-      }
+    nav button:hover {
+      background: #a5d6a7;
+      transform: scale(1.05);
+    }
 
-      .chart-container.active {
-        display: block;
-      }
+    nav button.active {
+      background: #66bb6a;
+      color: white;
+      font-weight: 700;
+    }
 
-      canvas {
-        width: 100% !important;
-        height: auto !important;
-        max-height: 350px;
-      }
-    </style>
-  </head><body>
-    <h2>Sensor Data (Last 72 Hours)</h2>
-    <div class="tabs">
-      <div class="tab active" data-chart="tempChart">Temperature</div>
-      <div class="tab" data-chart="humChart">Humidity</div>
-      <div class="tab" data-chart="illumChart">Illuminance</div>
-      <div class="tab" data-chart="soilChart">Soil Moisture</div>
+    /* Allow main content to grow and fill all remaining space */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 0.5em;
+      overflow: hidden;
+    }
+
+    /* Make each tab fill all space inside <main> */
+    .tab-content {
+      flex: 1;
+      display: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .tab-content.active {
+      display: flex;
+      flex-direction: column;
+    }
+
+    canvas {
+      flex: 1;
+      width: 100% !important;
+      height: 100% !important;
+    }
+
+    footer {
+      text-align: center;
+      padding: 0.8em;
+      font-size: 0.9em;
+      background: #eee;
+      color: #555;
+    }
+
+    #summary-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 12px;
+      font-size: 1.25em;
+      font-weight: 500;
+      color: #333;
+    }
+
+    #summary-table thead tr th {
+      text-align: left;
+      border-bottom: 2px solid #2196f3;
+      padding-bottom: 8px;
+      font-weight: 700;
+      color: #2196f3;
+    }
+
+    #summary-table tbody tr {
+      background: #f9fafb;
+      box-shadow: 0 3px 6px rgba(33, 150, 243, 0.1);
+      border-radius: 12px;
+      transition: background 0.3s ease;
+    }
+
+    #summary-table tbody tr:hover {
+      background: #e3f2fd;
+    }
+
+    #summary-table tbody tr td {
+      padding: 12px 16px;
+      border: none;
+    }
+
+    #summary-table tbody tr td:first-child {
+      font-weight: 600;
+      color: #1976d2;
+    }
+  </style>
+</head>
+<body>
+  <header>🌿 Plant Sensor Dashboard</header>
+  <nav>
+    <button onclick="showTab('temp')" id="btn-temp">🌡 Temperature</button>
+    <button onclick="showTab('hum')" id="btn-hum">💧 Humidity</button>
+    <button onclick="showTab('illum')" id="btn-illum">☀️ Light</button>
+    <button onclick="showTab('soil')" id="btn-soil">🌱 Soil</button>
+    <button onclick="showTab('summary')" id="btn-summary">📊 Summary</button>
+  </nav>
+
+  <main>
+    <div id="tab-temp" class="tab-content active"><canvas id="canvas-temp"></canvas></div>
+    <div id="tab-hum" class="tab-content"><canvas id="canvas-hum"></canvas></div>
+    <div id="tab-illum" class="tab-content"><canvas id="canvas-illum"></canvas></div>
+    <div id="tab-soil" class="tab-content"><canvas id="canvas-soil"></canvas></div>
+    <div id="tab-summary" class="tab-content">
+      <table id="summary-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Will be populated via JS -->
+        </tbody>
+      </table>
     </div>
+  </main>
 
-    <div id="tempChart" class="chart-container active"><canvas></canvas></div>
-    <div id="humChart" class="chart-container"><canvas></canvas></div>
-    <div id="illumChart" class="chart-container"><canvas></canvas></div>
-    <div id="soilChart" class="chart-container"><canvas></canvas></div>
+  <footer>
+    Data updates hourly – Last updated: <span id="last-updated">Loading...</span>
+  </footer>
 
-    <script>
-      document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-          document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-          document.querySelectorAll('.chart-container').forEach(c => c.classList.remove('active'));
-          tab.classList.add('active');
-          document.getElementById(tab.dataset.chart).classList.add('active');
-        });
+  <script>
+    function showTab(id) {
+      document.querySelectorAll('.tab-content').forEach(div => div.classList.remove('active'));
+      document.querySelectorAll('nav button').forEach(btn => btn.classList.remove('active'));
+      document.getElementById('tab-' + id).classList.add('active');
+      document.getElementById('btn-' + id).classList.add('active');
+    }
+
+    function createChart(ctx, label, values, color, labels) {
+      return new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label,
+            data: values,
+            borderColor: color,
+            backgroundColor: 'rgba(0,0,0,0.03)',
+            pointRadius: 2,
+            pointHoverRadius: 4,
+            fill: true,
+            tension: 0.25
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              ticks: {
+                maxRotation: 60,
+                minRotation: 45,
+                font: {
+                  size: 30  // ← Bigger x-axis labels
+                }
+              }
+            },
+            y: {
+              ticks: {
+                font: {
+                  size: 30  // ← Bigger y-axis labels
+                }
+              }
+            }
+          },
+          plugins: {
+            legend: {
+              display: true,
+              labels: {
+                font: {
+                  size: 30  // ← Bigger legend text
+                }
+              }
+            }
+          }
+        }
       });
+    }
 
-      fetch("/data").then(r => r.json()).then(data => {
+    function formatLabel(hoursAgo) {
+      const now = new Date();
+      now.setMinutes(0, 0, 0); // truncate to full hour
+      const date = new Date(now.getTime() - hoursAgo * 3600000);
+      const day = date.toLocaleDateString('en-US', { weekday: 'short' });
+      const hour = date.getHours().toString().padStart(2, '0');
+      return `${day} ${hour}:00`;
+    }
+
+    // --- Stats Calculation ---
+    function formatTime(time) {
+      const d = new Date(time * 1000);
+      const dayName = d.toLocaleDateString(undefined, { weekday: 'short' }); // e.g. "Mon"
+      const timestamp = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return `${dayName} ${timestamp}`;
+    }
+
+    function renderSummary(data) {
+      const times = data.map(d => d.time);
+      const temps = data.map(d => d.temp);
+      const hums = data.map(d => d.hum);
+      const illums = data.map(d => d.illum);
+      const soils = data.map(d => d.soil);
+
+      const avg = arr => (arr.reduce((a,b) => a + b, 0) / arr.length).toFixed(2);
+      const maxIndex = arr => arr.indexOf(Math.max(...arr));
+      const minIndex = arr => arr.indexOf(Math.min(...arr));
+
+      const avgTemp = avg(temps);
+      const maxTempIdx = maxIndex(temps);
+      const minTempIdx = minIndex(temps);
+
+      const avgHum = avg(hums);
+      const maxHumIdx = maxIndex(hums);
+      const minHumIdx = minIndex(hums);
+
+      const avgIllum = avg(illums);
+      const maxIllumIdx = maxIndex(illums);
+      const minIllumIdx = minIndex(illums);
+
+      const maxTemp = temps[maxTempIdx].toFixed(2);
+      const minTemp = temps[minTempIdx].toFixed(2);
+      const maxTempTime = formatTime(data[maxTempIdx].time);
+      const minTempTime = formatTime(data[minTempIdx].time);
+
+      const maxHum = hums[maxHumIdx].toFixed(2);
+      const minHum = hums[minHumIdx].toFixed(2);
+      const maxHumTime = formatTime(data[maxHumIdx].time);
+      const minHumTime = formatTime(data[minHumIdx].time);
+
+      const maxIllum = illums[maxIllumIdx].toFixed(2);
+      const minIllum = illums[minIllumIdx].toFixed(2);
+      const maxIllumTime = formatTime(data[maxIllumIdx].time);
+      const minIllumTime = formatTime(data[minIllumIdx].time);
+
+      let totalDecline = soils[soils.length - 1] - soils[0];
+      const d0 = times[0] * 1000;
+      const d1 = times[times.length - 1] * 1000;
+      const hours = (d1 - d0)/3600000;
+      console.log(hours);
+      const avgDecline = (totalDecline / hours).toFixed(3);
+
+      const table = document.querySelector("#summary-table tbody");
+      table.innerHTML = `
+        <tr><td>Average Temperature</td><td>${avgTemp} °C</td></tr>
+        <tr><td>Highest Temperature</td><td>${maxTemp} °C at ${maxTempTime}</td></tr>
+        <tr><td>Lowest Temperature</td><td>${minTemp} °C at ${minTempTime}</td></tr>
+
+        <tr><td>Average Humidity</td><td>${avgHum} %</td></tr>
+        <tr><td>Highest Humidity</td><td>${maxHum} % at ${maxHumTime}</td></tr>
+        <tr><td>Lowest Humidity</td><td>${minHum} % at ${minHumTime}</td></tr>
+
+        <tr><td>Average Illuminance</td><td>${avgIllum} lux</td></tr>
+        <tr><td>Highest Illuminance</td><td>${maxIllum} lux at ${maxIllumTime}</td></tr>
+        <tr><td>Lowest Illuminance</td><td>${minIllum} lux at ${minIllumTime}</td></tr>
+
+        <tr><td>Average Change in Soil Moisture</td><td>${avgDecline} % per hour</td></tr>
+      `;
+    }
+
+    fetch('/data')
+      .then(res => res.json())
+      .then(data => {
         const labels = data.map(e => {
           const d = new Date(e.time * 1000);
           const dayName = d.toLocaleDateString(undefined, { weekday: 'short' }); // e.g. "Mon"
           const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
           return `${dayName} ${time}`;
         });
-        const temp = data.map(e => e.temp);
-        const hum = data.map(e => e.hum);
-        const illum = data.map(e => e.illum);
-        const soil = data.map(e => e.soil);
+        const temps = data.map(e => e.temp);
+        const hums = data.map(e => e.hum);
+        const illums = data.map(e => e.illum);
+        const soils = data.map(e => e.soil);
 
-        const config = (label, data, color) => ({
-          type: 'line',
-          data: {
-            labels,
-            datasets: [{ label, data, borderColor: color, backgroundColor: color + '22', fill: false }]
-          },
-          options: {
-            responsive: true,
-            plugins: {
-              legend: { display: true },
-              tooltip: { mode: 'index', intersect: false }
-            },
-            scales: {
-              x: { ticks: { autoSkip: true, maxTicksLimit: 10 } },
-              y: { beginAtZero: true }
-            }
-          }
-        });
+        createChart(document.getElementById('canvas-temp'), 'Temperature (°C)', temps, '#e53935', labels);
+        createChart(document.getElementById('canvas-hum'), 'Humidity (%)', hums, '#1e88e5', labels);
+        createChart(document.getElementById('canvas-illum'), 'Illuminance (lux)', illums, '#ffb300', labels);
+        createChart(document.getElementById('canvas-soil'), 'Soil Moisture (%)', soils, '#43a047', labels);
 
-        new Chart(document.querySelector("#tempChart canvas"), config("Temperature (°C)", temp, "red"));
-        new Chart(document.querySelector("#humChart canvas"), config("Humidity (%)", hum, "blue"));
-        new Chart(document.querySelector("#illumChart canvas"), config("Illuminance (lx)", illum, "orange"));
-        new Chart(document.querySelector("#soilChart canvas"), config("Soil Moisture (%)", soil, "green"));
+        const now = new Date();
+        document.getElementById('last-updated').textContent = now.toLocaleString();
+        document.getElementById('btn-temp').classList.add('active');
+        renderSummary(data);
       });
-    </script>
-  </body></html>
-  )rawliteral";
-
-  server.send(200, "text/html", html);
+  </script>
+</body>
+</html>
+)rawliteral");
 }
 
 void handleData() {
