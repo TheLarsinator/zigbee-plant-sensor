@@ -4,12 +4,14 @@
 #include <AHT20.h>
 #include <BH1750.h>
 #include <time.h>
+#include <Preferences.h>
+#include <ArduinoJson.h>
 
 #define SOIL_MOISTURE_PIN A1
 #define WIFI_SSID     ""
 #define WIFI_PASSWORD ""
 
-#define MAX_ENTRIES 72
+#define MAX_ENTRIES 288
 
 WebServer server(80);
 AHT20 aht;  // AHT30 sensor
@@ -27,6 +29,11 @@ struct Measurement {
 Measurement data[MAX_ENTRIES];
 int dataIndex = 0;
 int dataCount = 0;
+
+Preferences preferences;
+float temperatureOffset = 0.0;
+int soilMoistureMin = 0.0;
+int soilMoistureMax = 0.0;
 
 void syncTime() {
   configTime(0, 0, "pool.ntp.org");
@@ -57,7 +64,7 @@ String getChartData() {
     Measurement m = data[idx];
     json += "{";
     json += "\"time\":" + String(m.timestamp) + ",";
-    json += "\"temp\":" + String(m.temperature, 2) + ",";
+    json += "\"temp\":" + String(m.temperature  + temperatureOffset, 2) + ",";
     json += "\"hum\":" + String(m.humidity, 2) + ",";
     json += "\"illum\":" + String(m.illuminance, 1) + ",";
     json += "\"soil\":" + String(m.soilMoisture);
@@ -103,11 +110,11 @@ void handleRoot() {
     }
 
     nav button {
-      padding: 1.2em 2em;
+      padding: 0.3em 0.3em;
       margin: 0.4em;
       border: none;
       background: transparent;
-      font-size: 1.5em;
+      font-size: 4em;
       font-weight: 600;
       border-radius: 10px;
       cursor: pointer;
@@ -198,16 +205,66 @@ void handleRoot() {
       font-weight: 600;
       color: #1976d2;
     }
+
+    #calibration-section h2 {
+      color: #2e7d32;
+      font-weight: 700;
+      margin-bottom: 0.5em;
+      font-size: 1.5em;
+      text-align: center;
+    }
+
+    #calibration-section label {
+      font-weight: 600;
+      color: #2e7d32;
+      display: block;
+      margin-bottom: 0.3em;
+      font-size: 1.2em;
+    }
+
+    #calibration-section input {
+      width: 100%;
+      padding: 0.6em 1em;
+      font-size: 1.1em;
+      border: 2px solid #66bb6a;
+      border-radius: 10px;
+      margin-bottom: 1em;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+
+    #calibration-section input:focus {
+      border-color: #2e7d32;
+      outline: none;
+    }
+
+    #calibration-section button {
+      width: 100%;
+      padding: 12px 0;
+      font-size: 1.3em;
+      background-color: #2e7d32;
+      color: white;
+      border-radius: 10px;
+      border: none;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    #calibration-section button:hover {
+      background-color: #27632a;
+    }
   </style>
 </head>
 <body>
   <header>🌿 Plant Sensor Dashboard</header>
   <nav>
-    <button onclick="showTab('temp')" id="btn-temp">🌡 Temperature</button>
-    <button onclick="showTab('hum')" id="btn-hum">💧 Humidity</button>
-    <button onclick="showTab('illum')" id="btn-illum">☀️ Light</button>
-    <button onclick="showTab('soil')" id="btn-soil">🌱 Soil</button>
-    <button onclick="showTab('summary')" id="btn-summary">📊 Summary</button>
+    <button onclick="showTab('temp')" id="btn-temp">🌡️</button>
+    <button onclick="showTab('hum')" id="btn-hum">☁️</button>
+    <button onclick="showTab('illum')" id="btn-illum">☀️</button>
+    <button onclick="showTab('soil')" id="btn-soil">🌱</button>
+    <button onclick="showTab('summary')" id="btn-summary">📊</button>
+    <button onclick="showTab('calibration')" id="btn-calibartion">⚙️</button>
   </nav>
 
   <main>
@@ -228,10 +285,24 @@ void handleRoot() {
         </tbody>
       </table>
     </div>
+    <div id="tab-calibration" class="tab-content">
+      <div style="font-size: 1.2em; max-width: 400px; margin: auto;" id="calibration-section">
+        <label for="tempOffset">🌡️ Temperature Offset (°C):</label>
+        <input type="number" step="0.1" id="tempOffset">
+
+        <label for="soilMin">💧 Soil Moisture Wet:</label>
+        <input type="number" step="1" id="soilMin">
+
+        <label for="soilMax">🌵 Soil Moisture Dry:</label>
+        <input type="number" step="1" id="soilMax">
+
+        <button onclick="saveCalibration()">💾 Save</button>
+      </div>
+    </div>
   </main>
 
   <footer>
-    Data updates hourly – Last updated: <span id="last-updated">Loading...</span>
+    Data updates every 15 minutes – Last updated: <span id="last-updated">Loading...</span>
   </footer>
 
   <script>
@@ -308,6 +379,25 @@ void handleRoot() {
       const dayName = d.toLocaleDateString(undefined, { weekday: 'short' }); // e.g. "Mon"
       const timestamp = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       return `${dayName} ${timestamp}`;
+    }
+
+    function saveCalibration() {
+      console.log("Save calibration");
+      const offset = parseFloat(document.getElementById("tempOffset").value);
+      const soilMin = parseFloat(document.getElementById("soilMin").value);
+      const soilMax = parseFloat(document.getElementById("soilMax").value);
+
+      fetch("/set_offset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offset, soilMin, soilMax })
+      }).then(res => {
+        if (res.ok) {
+          location.reload();
+        } else {
+          alert("Failed to save calibration.");
+        }
+      });
     }
 
     function renderSummary(data) {
@@ -397,6 +487,17 @@ void handleRoot() {
         document.getElementById('btn-temp').classList.add('active');
         renderSummary(data);
       });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      // Load current offset from ESP
+      fetch("/config")
+        .then(response => response.json())
+        .then(data => {
+          document.getElementById("tempOffset").value = data.tempOffset.toFixed(1);
+          document.getElementById("soilMin").value = data.soilMin.toFixed(1);
+          document.getElementById("soilMax").value = data.soilMax.toFixed(1);
+        });
+    });
   </script>
 </body>
 </html>
@@ -405,6 +506,58 @@ void handleRoot() {
 
 void handleData() {
   server.send(200, "application/json", getChartData());
+}
+
+void handleSetOffset() {
+  if (server.hasArg("plain") == false) {
+    server.send(400, "application/json", "{\"error\":\"Missing body\"}");
+    return;
+  }
+
+  String body = server.arg("plain");
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, body);
+
+  if (error) {
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  float offsetNew = doc["offset"] | 0.0;
+  int soilMinNew = doc["soilMin"] | 0.0;
+  int soilMaxNew = doc["soilMax"] | 0.0;
+
+  if (offsetNew != 0.0 && offsetNew != temperatureOffset) {
+    preferences.putFloat("tempOffset", offsetNew);
+    Serial.printf("New temperature offset: %.2f\n", offsetNew);
+    temperatureOffset = offsetNew;
+  }
+  if (soilMinNew != 0.0 && soilMinNew != soilMoistureMin) {
+    preferences.putInt("soilMoistureMin", soilMinNew);
+    Serial.print("New soil moisture min: ");
+    Serial.println(soilMinNew);
+    soilMoistureMin = soilMinNew;
+  }
+  if (soilMaxNew != 0.0 && soilMaxNew != soilMoistureMax) {
+    preferences.putInt("soilMoistureMax", soilMaxNew);
+    Serial.print("New soil moisture max: ");
+    Serial.println(soilMaxNew);
+    soilMoistureMax = soilMaxNew;
+  }
+
+  server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
+void handleConfig() {
+  StaticJsonDocument<200> json;
+
+  json["tempOffset"] = temperatureOffset; // existing
+  json["soilMin"] = soilMoistureMin;  // new
+  json["soilMax"] = soilMoistureMax;  // new
+
+  String response;
+  serializeJson(json, response);
+  server.send(200, "application/json", response);
 }
 
 void setup() {
@@ -429,6 +582,11 @@ void setup() {
   Serial.println("\nConnected to WiFi");
   Serial.println(WiFi.localIP());
 
+  preferences.begin("calibration", false);
+  temperatureOffset = preferences.getFloat("tempOffset", 0.0);
+  soilMoistureMin = preferences.getInt("soilMoistureMin", 0.0);
+  soilMoistureMax = preferences.getInt("soilMoistureMax", 0.0);
+
   syncTime();
 
   aht.begin();
@@ -436,6 +594,9 @@ void setup() {
 
   server.on("/", handleRoot);
   server.on("/data", handleData);
+  server.on("/set_offset", HTTP_POST, handleSetOffset);
+
+  server.on("/config", handleConfig);
   server.begin();
 }
 
@@ -444,13 +605,13 @@ unsigned long lastMeasureTime = 0;
 void loop() {
   server.handleClient();
 
-  if (millis() - lastMeasureTime > 3600000UL || lastMeasureTime == 0) {  // every 1 hour
+  if (millis() - lastMeasureTime > 900000UL || lastMeasureTime == 0) {
     lastMeasureTime = millis();
     float temp = aht.getTemperature();
     float hum = aht.getHumidity();
     float illum = lightMeter.readLightLevel();
     int soil_raw = analogRead(SOIL_MOISTURE_PIN);
-    int soil = (1 - ((soil_raw - 1580.0) / (2650.0 - 1580))) * 100;
+    int soil = (1 - ((soil_raw - soilMoistureMin) / (soilMoistureMax + 1.0F - soilMoistureMin))) * 100;
 
     Serial.printf("Temp: %.2f, Hum: %.2f, Illum: %.2f, Soil: %d\n", temp, hum, illum, soil);
     addMeasurement(temp, hum, illum, soil);

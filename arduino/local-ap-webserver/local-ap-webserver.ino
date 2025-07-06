@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include <AHT20.h>
 #include <BH1750.h>
+#include <Preferences.h>
 
 // AP credentials
 const char* ssid = "PlantSensor_ZPS00X";
@@ -11,11 +12,16 @@ const char* password = "ZPS00X-P";
 
 WebServer server(80);
 
-#define MAX_MEASUREMENTS 72
+#define MAX_MEASUREMENTS 288
 #define SOIL_MOISTURE_PIN A1
 
 AHT20 aht;  // AHT30 sensor
 BH1750 lightMeter;
+
+Preferences preferences;
+float temperatureOffset = 0.0;
+int soilMoistureMin = 0.0;
+int soilMoistureMax = 0.0;
 
 struct Measurement {
   float temp;
@@ -29,7 +35,7 @@ int writeIndex = 0;
 int storedCount = 0;
 
 unsigned long lastMeasurementMillis = 0;
-const unsigned long measurementInterval = 3600000; // 1 hour = 3600000 ms
+const unsigned long measurementInterval = 900000; // 1 hour = 3600000 ms
 
 void setup() {
   Serial.begin(115200);
@@ -49,9 +55,17 @@ void setup() {
     measurements[i] = {0,0,0,0};
   }
 
+  preferences.begin("calibration", false);
+  temperatureOffset = preferences.getFloat("tempOffset", 0.0);
+  soilMoistureMin = preferences.getInt("soilMoistureMin", 0.0);
+  soilMoistureMax = preferences.getInt("soilMoistureMax", 0.0);
+
   // Setup web server routes
   server.on("/", handleRoot);
   server.on("/data", handleData);
+  server.on("/set_offset", HTTP_POST, handleSetOffset);
+  server.on("/config", handleConfig);
+
   server.begin();
   Serial.println("HTTP server started");
 }
@@ -71,7 +85,7 @@ void takeMeasurement() {
   float t = aht.getTemperature();
   float h = aht.getHumidity();
   float i = lightMeter.readLightLevel();
-  float s = (1 - ((analogRead(SOIL_MOISTURE_PIN) - 1580.0) / (2650.0 - 1580))) * 100;
+  float s = (1 - ((analogRead(SOIL_MOISTURE_PIN) - soilMoistureMin) / (soilMoistureMax + 1.0F - soilMoistureMin))) * 100;
 
   addMeasurement(t,h,i,s);
 
@@ -94,7 +108,7 @@ void handleData() {
     int idx = (oldestIndex + i) % MAX_MEASUREMENTS;
     JsonObject obj = arr.createNestedObject();
     obj["hoursAgo"] = storedCount - 1 - i;  // 0 newest, increasing backwards
-    obj["temp"] = measurements[idx].temp;
+    obj["temp"] = measurements[idx].temp + temperatureOffset;
     obj["hum"] = measurements[idx].hum;
     obj["illum"] = measurements[idx].illum;
     obj["soil"] = measurements[idx].soil;
@@ -103,6 +117,58 @@ void handleData() {
   String output;
   serializeJson(doc, output);
   server.send(200, "application/json", output);
+}
+
+void handleSetOffset() {
+  if (server.hasArg("plain") == false) {
+    server.send(400, "application/json", "{\"error\":\"Missing body\"}");
+    return;
+  }
+
+  String body = server.arg("plain");
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, body);
+
+  if (error) {
+    server.send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  float offsetNew = doc["offset"] | 0.0;
+  int soilMinNew = doc["soilMin"] | 0.0;
+  int soilMaxNew = doc["soilMax"] | 0.0;
+
+  if (offsetNew != 0.0 && offsetNew != temperatureOffset) {
+    preferences.putFloat("tempOffset", offsetNew);
+    Serial.printf("New temperature offset: %.2f\n", offsetNew);
+    temperatureOffset = offsetNew;
+  }
+  if (soilMinNew != 0.0 && soilMinNew != soilMoistureMin) {
+    preferences.putInt("soilMoistureMin", soilMinNew);
+    Serial.print("New soil moisture min: ");
+    Serial.println(soilMinNew);
+    soilMoistureMin = soilMinNew;
+  }
+  if (soilMaxNew != 0.0 && soilMaxNew != soilMoistureMax) {
+    preferences.putInt("soilMoistureMax", soilMaxNew);
+    Serial.print("New soil moisture max: ");
+    Serial.println(soilMaxNew);
+    soilMoistureMax = soilMaxNew;
+  }
+
+  server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
+void handleConfig() {
+  StaticJsonDocument<200> json;
+
+  json["tempOffset"] = temperatureOffset; // existing
+  json["soilMin"] = soilMoistureMin;  // new
+  json["soilMax"] = soilMoistureMax;  // new
+
+  String response;
+  serializeJson(json, response);
+  server.send(200, "application/json", response);
 }
 
 void handleRoot() {
@@ -140,11 +206,11 @@ void handleRoot() {
     }
 
     nav button {
-      padding: 1.2em 2em;
+      padding: 0.3em 0.3em;
       margin: 0.4em;
       border: none;
       background: transparent;
-      font-size: 1.5em;
+      font-size: 4em;
       font-weight: 600;
       border-radius: 10px;
       cursor: pointer;
@@ -235,16 +301,66 @@ void handleRoot() {
       font-weight: 600;
       color: #1976d2;
     }
+    
+    #calibration-section h2 {
+      color: #2e7d32;
+      font-weight: 700;
+      margin-bottom: 0.5em;
+      font-size: 1.5em;
+      text-align: center;
+    }
+
+    #calibration-section label {
+      font-weight: 600;
+      color: #2e7d32;
+      display: block;
+      margin-bottom: 0.3em;
+      font-size: 1.2em;
+    }
+
+    #calibration-section input {
+      width: 100%;
+      padding: 0.6em 1em;
+      font-size: 1.1em;
+      border: 2px solid #66bb6a;
+      border-radius: 10px;
+      margin-bottom: 1em;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+
+    #calibration-section input:focus {
+      border-color: #2e7d32;
+      outline: none;
+    }
+
+    #calibration-section button {
+      width: 100%;
+      padding: 12px 0;
+      font-size: 1.3em;
+      background-color: #2e7d32;
+      color: white;
+      border-radius: 10px;
+      border: none;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    #calibration-section button:hover {
+      background-color: #27632a;
+    }
   </style>
 </head>
 <body>
   <header>🌿 Plant Sensor Dashboard</header>
   <nav>
-    <button onclick="showTab('temp')" id="btn-temp">🌡 Temperature</button>
-    <button onclick="showTab('hum')" id="btn-hum">💧 Humidity</button>
-    <button onclick="showTab('illum')" id="btn-illum">☀️ Light</button>
-    <button onclick="showTab('soil')" id="btn-soil">🌱 Soil</button>
-    <button onclick="showTab('summary')" id="btn-summary">📊 Summary</button>
+    <button onclick="showTab('temp')" id="btn-temp">🌡️</button>
+    <button onclick="showTab('hum')" id="btn-hum">☁️</button>
+    <button onclick="showTab('illum')" id="btn-illum">☀️</button>
+    <button onclick="showTab('soil')" id="btn-soil">🌱</button>
+    <button onclick="showTab('summary')" id="btn-summary">📊</button>
+    <button onclick="showTab('calibration')" id="btn-calibartion">⚙️</button>
   </nav>
 
   <main>
@@ -265,10 +381,24 @@ void handleRoot() {
         </tbody>
       </table>
     </div>
+    <div id="tab-calibration" class="tab-content">
+      <div style="font-size: 1.2em; max-width: 400px; margin: auto;" id="calibration-section">
+        <label for="tempOffset">🌡️ Temperature Offset (°C):</label>
+        <input type="number" step="0.1" id="tempOffset">
+
+        <label for="soilMin">💧 Soil Moisture Wet:</label>
+        <input type="number" step="1" id="soilMin">
+
+        <label for="soilMax">🌵 Soil Moisture Dry:</label>
+        <input type="number" step="1" id="soilMax">
+
+        <button onclick="saveCalibration()">💾 Save</button>
+      </div>
+    </div>
   </main>
 
   <footer>
-    Data updates hourly – Last updated: <span id="last-updated">Loading...</span>
+    Data updates every 15 minutes – Last updated: <span id="last-updated">Loading...</span>
   </footer>
 
   <script>
@@ -347,6 +477,25 @@ void handleRoot() {
       return date.toLocaleString('en-US', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
     }
 
+    function saveCalibration() {
+      console.log("Save calibration");
+      const offset = parseFloat(document.getElementById("tempOffset").value);
+      const soilMin = parseFloat(document.getElementById("soilMin").value);
+      const soilMax = parseFloat(document.getElementById("soilMax").value);
+
+      fetch("/set_offset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ offset, soilMin, soilMax })
+      }).then(res => {
+        if (res.ok) {
+          location.reload();
+        } else {
+          alert("Failed to save calibration.");
+        }
+      });
+    }
+
     function renderSummary(data) {
       const temps = data.map(d => d.temp);
       const hums = data.map(d => d.hum);
@@ -423,6 +572,17 @@ void handleRoot() {
         document.getElementById('last-updated').textContent = now.toLocaleString();
         document.getElementById('btn-temp').classList.add('active');
         renderSummary(data);
+      });
+
+      window.addEventListener('DOMContentLoaded', () => {
+        // Load current offset from ESP
+        fetch("/config")
+          .then(response => response.json())
+          .then(data => {
+            document.getElementById("tempOffset").value = data.tempOffset.toFixed(1);
+            document.getElementById("soilMin").value = data.soilMin.toFixed(1);
+            document.getElementById("soilMax").value = data.soilMax.toFixed(1);
+          });
       });
   </script>
 </body>
