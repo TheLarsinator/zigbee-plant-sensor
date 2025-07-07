@@ -45,7 +45,7 @@ void setup() {
   lightMeter.begin(BH1750::CONTINUOUS_HIGH_RES_MODE);
 
   // Start WiFi AP
-  WiFi.softAP(ssid, password);
+  WiFi.softAP(ssid);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("AP IP address: ");
   Serial.println(IP);
@@ -74,7 +74,7 @@ void loop() {
   server.handleClient();
 
   unsigned long now = millis();
-  if (now - lastMeasurementMillis >= measurementInterval) {
+  if (now - lastMeasurementMillis >= measurementInterval || lastMeasurementMillis == 0) {
     lastMeasurementMillis = now;
     takeMeasurement();
   }
