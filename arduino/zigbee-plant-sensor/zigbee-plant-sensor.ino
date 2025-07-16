@@ -17,18 +17,20 @@
 
 #define BATTERY_PIN A0
 #define SOIL_PIN A1
+#define SOIL_POWER_PIN 19
 
 #define SLOW_BLINK_SPEED 500
 #define FAST_BLINK_SPEED 250
 
-#define BOOT_DELAY 2800
+#define BOOT_DELAY 2500
 #define PAIRING_DELAY 30000
 #define TRANSMISSION_DELAY 100
+#define SOIL_MOISTURE_POWER_DELAY 500
 
 #define SLOW_BOOTS 2
 
-float soil_moisture_lower_limit = 1050;
-float soil_moisture_upper_limit = 2700;
+float soil_moisture_lower_limit = 1000;
+float soil_moisture_upper_limit = 2600;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 AHT20 aht20;
@@ -40,8 +42,8 @@ ZigbeeAnalog zbSoilMoistureSensor = ZigbeeAnalog(MOISTURE_SENSOR_ENDPOINT_NUMBER
 ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
 
 RTC_DATA_ATTR int bootCount = 0;
-RTC_DATA_ATTR int lastBatteryPercentage = 0;
-RTC_DATA_ATTR int lastSoilMoisturePercentage = 0;
+RTC_DATA_ATTR int lastBatteryPercentage = -10;
+RTC_DATA_ATTR int lastSoilMoisturePercentage = -10;
 
 void blinkAndWait(int delayMillis, long speed)
 {
@@ -85,15 +87,23 @@ void reportBatteryPercentage(float batteryPercentage)
 
 float measureSoilMoisture()
 {
+    // Power the soil moisture sensor.
+    digitalWrite(SOIL_POWER_PIN, HIGH);
+    delay(SOIL_MOISTURE_POWER_DELAY); // Allow the sensor to stabilize.
+
     // Measure 16 times and take the average.
     uint32_t moistureReadings = 0;
     for(int i = 0; i < 16; i++) {
       moistureReadings += analogRead(SOIL_PIN); // Read and accumulate ADC voltage
     }
+
+    // Power off the soil moisture sensor.
+    digitalWrite(SOIL_POWER_PIN, LOW);
+
     float moistureReading = moistureReadings / 16;
     // We assume the HW390 behaves linearly between the lower and upper limit.
     float moisturePercentage = (1 -((moistureReading - soil_moisture_lower_limit) / (soil_moisture_upper_limit - soil_moisture_lower_limit))) * 100;
-
+    Serial.println(moisturePercentage);
     return roundPercentageDown(moisturePercentage, 5);
 }
 
@@ -250,6 +260,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(SOIL_PIN, INPUT);
   pinMode(BATTERY_PIN, INPUT);
+  pinMode(SOIL_POWER_PIN, OUTPUT);
 
   // Connect to AHT30 sensor.
   Wire.begin();
