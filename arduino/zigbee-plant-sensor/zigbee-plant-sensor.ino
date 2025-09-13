@@ -29,7 +29,7 @@
 
 #define SLOW_BOOTS 2
 
-float soil_moisture_lower_limit = 940;
+float soil_moisture_lower_limit = 1020;
 float soil_moisture_upper_limit = 2600;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
@@ -322,11 +322,7 @@ void loop() {
   reportIlluminance(illuminance);
 
   float soilMoisture = measureSoilMoisture();
-  if (soilMoisture != lastSoilMoisturePercentage)
-  {
-    lastSoilMoisturePercentage = soilMoisture;
-    reportSoilMoisture(soilMoisture);
-  }
+  reportSoilMoisture(soilMoisture);
 
   float temperature, humidity;
   measureTemperatureAndHumidity(&temperature, &humidity);
