@@ -26,17 +26,20 @@
 #define PAIRING_DELAY 30000
 #define TRANSMISSION_DELAY 100
 #define SOIL_MOISTURE_POWER_DELAY 500
+#define LIGHT_MEASUREMENT_TIMEOUT 500
+#define LIGHT_MEASUREMENT_POLL_DELAY 10
 
 #define SLOW_BOOTS 2
 
-float soil_moisture_lower_limit = 1020;
-float soil_moisture_upper_limit = 2600;
+float soil_moisture_lower_limit = 1050;
+float soil_moisture_upper_limit = 2650;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 AHT20 aht20;
 
 ZigbeeIlluminanceSensor zbIlluminanceSensor = ZigbeeIlluminanceSensor(ZIGBEE_ILLUMINANCE_SENSOR_ENDPOINT);
 BH1750 light_sensor;
+bool lightSensorDetected = false;
 
 ZigbeeAnalog zbSoilMoistureSensor = ZigbeeAnalog(MOISTURE_SENSOR_ENDPOINT_NUMBER);
 ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
@@ -119,11 +122,33 @@ void reportSoilMoisture(float soilMoisturePercentage)
 
 int measureIlluminance()
 {
-  return light_sensor.readLightLevel();
+  if (!lightSensorDetected)
+  {
+    return -1;
+  }
+
+  int waitTime = 0;
+  while (!light_sensor.measurementReady() && waitTime < LIGHT_MEASUREMENT_TIMEOUT)
+  {
+    delay(LIGHT_MEASUREMENT_POLL_DELAY);
+    waitTime += LIGHT_MEASUREMENT_POLL_DELAY;
+  }
+
+  if (!light_sensor.measurementReady())
+  {
+    Serial.println("BH1750 measurement timeout.");
+    return -1;
+  }
+
+  return round(light_sensor.readLightLevel());
 }
 
 void reportIlluminance(int illuminance)
 {
+  if (illuminance < 0)
+  {
+    return;
+  }
   // Update.
   int zigbee_illuminance = 10000 * log10(illuminance);
   zbIlluminanceSensor.setIlluminance(zigbee_illuminance);
@@ -267,6 +292,7 @@ void setup() {
   if (!light_sensor.begin()) {
     Serial.println("BH1750 not detected. Please check wiring.");
   }
+  light_sensor.configure(BH1750::ONE_TIME_HIGH_RES_MODE_2);
 
   if (aht20.begin() == false)
   {

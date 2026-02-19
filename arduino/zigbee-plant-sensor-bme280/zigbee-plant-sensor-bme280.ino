@@ -15,7 +15,7 @@
 #define PRESSURE_ENDPOINT_NUMBER 13
 
 #define uS_TO_S_FACTOR 1000000ULL /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  897
+#define TIME_TO_SLEEP  60
 
 #define BATTERY_PIN A0
 #define SOIL_PIN A1
@@ -28,6 +28,8 @@
 #define PAIRING_DELAY 30000
 #define TRANSMISSION_DELAY 100
 #define SOIL_MOISTURE_POWER_DELAY 500
+#define LIGHT_MEASUREMENT_TIMEOUT 500
+#define LIGHT_MEASUREMENT_POLL_DELAY 10
 
 #define SLOW_BOOTS 2
 
@@ -36,10 +38,12 @@ float soil_moisture_upper_limit = 2600;
 
 ZigbeeIlluminanceSensor zbIlluminanceSensor = ZigbeeIlluminanceSensor(ZIGBEE_ILLUMINANCE_SENSOR_ENDPOINT);
 BH1750 light_sensor;
+bool lightSensorDetected = false;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 ZigbeePressureSensor zbPressureSensor = ZigbeePressureSensor(PRESSURE_ENDPOINT_NUMBER);
 Adafruit_BME280 bme;
+bool bmeDetected = false;
 
 ZigbeeAnalog zbSoilMoistureSensor = ZigbeeAnalog(MOISTURE_SENSOR_ENDPOINT_NUMBER);
 ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
@@ -71,8 +75,18 @@ void blinkAndWait(int delayMillis, long speed)
   }
 }
 
+void setBmeSleepMode()
+{
+  if (bmeDetected)
+  {
+    bme.setSampling(Adafruit_BME280::MODE_SLEEP);
+  }
+}
+
 void goToSleep()
 {
+  setBmeSleepMode();
+
   // Configure the wake up source and go to sleep.
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
   esp_deep_sleep_start();
@@ -133,11 +147,33 @@ void reportSoilMoisture(float soilMoisturePercentage)
 
 int measureIlluminance()
 {
-  return light_sensor.readLightLevel();
+  if (!lightSensorDetected)
+  {
+    return -1;
+  }
+
+  int waitTime = 0;
+  while (!light_sensor.measurementReady() && waitTime < LIGHT_MEASUREMENT_TIMEOUT)
+  {
+    delay(LIGHT_MEASUREMENT_POLL_DELAY);
+    waitTime += LIGHT_MEASUREMENT_POLL_DELAY;
+  }
+
+  if (!light_sensor.measurementReady())
+  {
+    Serial.println("BH1750 measurement timeout.");
+    return -1;
+  }
+
+  return round(light_sensor.readLightLevel());
 }
 
 void reportIlluminance(int illuminance)
 {
+  if (illuminance < 0)
+  {
+    return;
+  }
   // Update.
   int zigbee_illuminance = 10000 * log10(illuminance);
   zbIlluminanceSensor.setIlluminance(zigbee_illuminance);
@@ -151,6 +187,9 @@ void measureTemperatureAndHumidity(float* temperature, float* humidity)
   // Measure.
   *temperature =  bme.readTemperature();
   *humidity = bme.readHumidity();
+
+  Serial.println(*temperature);
+  Serial.println(*humidity);
 }
 
 void reportTemperatureAndHumidity(float temperature, float humidity)
@@ -167,12 +206,13 @@ void measurePressure(float* pressure)
 {
   // Measure.
   *pressure =  bme.readPressure() / 100.0F;
+  Serial.println(*pressure);
 }
 
 void reportPressure(float pressure)
 {
   // Update.
-  zbPressureSensor.setPressure(pressure);
+  zbPressureSensor.setPressure((int)pressure);
 
   // Report.
   zbPressureSensor.report();
@@ -238,7 +278,7 @@ void configureZigbeeStack()
   zbIlluminanceSensor.setTolerance(1);
 
   // Setup the analog device.
-  zbSoilMoistureSensor.addAnalogInput();
+  // zbSoilMoistureSensor.addAnalogInput();
   analogReadResolution(12);
 
   // Setup the pressure endpoint.
@@ -251,7 +291,7 @@ void configureZigbeeStack()
   // Add endpoints to Zigbee Core
   Zigbee.addEndpoint(&zbIlluminanceSensor);
   Zigbee.addEndpoint(&zbTempSensor);
-  Zigbee.addEndpoint(&zbSoilMoistureSensor);
+  // Zigbee.addEndpoint(&zbSoilMoistureSensor);
   Zigbee.addEndpoint(&zbPressureSensor);
 
   // For battery powered devices, it can be better to set timeout for Zigbee Begin to lower value to save battery
@@ -282,7 +322,8 @@ void startZigbee()
   zbTempSensor.setReporting(120, 120, 10);
   zbTempSensor.setHumidityReporting(120,120,10);
   zbIlluminanceSensor.setReporting(120, 120, 10);
-  zbSoilMoistureSensor.setAnalogInputReporting(120, 120, 10);
+  // zbSoilMoistureSensor.setAnalogInputReporting(120, 120, 10);
+  zbPressureSensor.setReporting(0, 60, 0.1);
 }
 
 /********************* Arduino functions **************************/
@@ -303,11 +344,14 @@ void setup() {
 
   // Connect to AHT30 sensor.
   Wire.begin();
-  if (!light_sensor.begin()) {
+  lightSensorDetected = light_sensor.begin();
+  if (!lightSensorDetected) {
     Serial.println("BH1750 not detected. Please check wiring.");
   }
+  light_sensor.configure(BH1750::ONE_TIME_HIGH_RES_MODE_2);
 
-  if (bme.begin(0x76) == false)
+  bmeDetected = bme.begin(0x76);
+  if (bmeDetected == false)
   {
     Serial.println("BME280 not detected. Please check wiring.");
   }
@@ -334,6 +378,7 @@ void loop() {
         // Optional set reset in factoryReset to false, to not restart device after erasing nvram, but set it to endless sleep manually instead
         Zigbee.factoryReset(false);
         Serial.println("Going to endless sleep, press RESET BOOT_PIN or power off/on the device to wake up");
+
         esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
         esp_deep_sleep_start();
       }
@@ -358,14 +403,17 @@ void loop() {
   }
 
   int illuminance = measureIlluminance();
-  reportIlluminance(illuminance);
+  if (illuminance >= 0)
+  {
+    reportIlluminance(illuminance);
+  }
 
-  // float soilMoisture = measureSoilMoisture();
-  // if (soilMoisture != lastSoilMoisturePercentage)
-  // {
-  //   lastSoilMoisturePercentage = soilMoisture;
-  //   reportSoilMoisture(soilMoisture);
-  // }
+  float soilMoisture = measureSoilMoisture();
+  if (soilMoisture != lastSoilMoisturePercentage)
+  {
+    lastSoilMoisturePercentage = soilMoisture;
+    reportSoilMoisture(soilMoisture);
+  }
 
   float temperature, humidity;
   measureTemperatureAndHumidity(&temperature, &humidity);
@@ -374,7 +422,7 @@ void loop() {
   float pressure;
   measurePressure(&pressure);
   reportPressure(pressure);
-
+  Serial.println("DONE");
   // Small delay to allow all reporting to finish.
   delay(TRANSMISSION_DELAY);
 
