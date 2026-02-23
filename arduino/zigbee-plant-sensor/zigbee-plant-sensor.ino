@@ -13,16 +13,18 @@
 #define BATTERY_VOLTAGE_ENDPOINT_NUMBER 12
 
 #define uS_TO_S_FACTOR 1000000ULL /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP  897
+#define TIME_TO_SLEEP  898
 
 #define BATTERY_PIN A0
 #define SOIL_PIN A1
 #define SOIL_POWER_PIN 19
+#define INTERRUPT_PULSE_PIN D6
+#define INTERRUPT_PULSE_WIDTH_US 50
 
-#define SLOW_BLINK_SPEED 500
-#define FAST_BLINK_SPEED 250
+#define SLOW_BLINK_SPEED 50
+#define FAST_BLINK_SPEED 50
 
-#define BOOT_DELAY 2500
+#define BOOT_DELAY 250
 #define PAIRING_DELAY 30000
 #define TRANSMISSION_DELAY 100
 #define SOIL_MOISTURE_POWER_DELAY 500
@@ -33,6 +35,7 @@
 
 float soil_moisture_lower_limit = 1050;
 float soil_moisture_upper_limit = 2650;
+float soil_moisture = 0;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 AHT20 aht20;
@@ -104,9 +107,9 @@ float measureSoilMoisture()
     digitalWrite(SOIL_POWER_PIN, LOW);
 
     float moistureReading = moistureReadings / 16;
+
     // We assume the HW390 behaves linearly between the lower and upper limit.
     float moisturePercentage = (1 -((moistureReading - soil_moisture_lower_limit) / (soil_moisture_upper_limit - soil_moisture_lower_limit))) * 100;
-    Serial.println(moisturePercentage);
     return roundPercentageDown(moisturePercentage, 1);
 }
 
@@ -289,7 +292,8 @@ void setup() {
 
   // Connect to AHT30 sensor.
   Wire.begin();
-  if (!light_sensor.begin()) {
+  lightSensorDetected = light_sensor.begin();
+  if (!lightSensorDetected) {
     Serial.println("BH1750 not detected. Please check wiring.");
   }
   light_sensor.configure(BH1750::ONE_TIME_HIGH_RES_MODE_2);
@@ -299,13 +303,20 @@ void setup() {
     Serial.println("AHT20 not detected. Please check wiring.");
   }
 
+  // We measure the soil moisture before we enable the radio. This saves SOIL_MOISTURE_POWER_DELAY ms of radio on-time. 
+  soil_moisture = measureSoilMoisture();
+
   configureZigbeeStack();
   startZigbee();
 }
 
 void loop() {
-  // Smal delay to allow establishing a proper connection with the coordinator. Done before the loop to allow for pressing the boot button after starting.
-  blinkAndWait(BOOT_DELAY, SLOW_BLINK_SPEED);
+  // The initial pairing is slower, so we wait longer the first times we boot before sending data. We do this before the factory
+  // reset check, so if the user wants to factory reset the device, they have more time to do so.
+  if (bootCount < SLOW_BOOTS)
+  {
+    blinkAndWait(PAIRING_DELAY, FAST_BLINK_SPEED);
+  }
 
   // Checking BOOT_PIN for factory reset
   if (digitalRead(BOOT_PIN) == LOW) {  // Push BOOT_PIN pressed
@@ -330,12 +341,6 @@ void loop() {
     }
   }
 
-  // The initial pairing is slower, so we wait longer the first 2 times we boot before sending data.
-  if (bootCount < SLOW_BOOTS)
-  {
-    blinkAndWait(PAIRING_DELAY, FAST_BLINK_SPEED);
-  }
-
   int batteryPercentage = measureBatteryPercentage();
 
   if (batteryPercentage != lastBatteryPercentage)
@@ -347,8 +352,7 @@ void loop() {
   int illuminance = measureIlluminance();
   reportIlluminance(illuminance);
 
-  float soilMoisture = measureSoilMoisture();
-  reportSoilMoisture(soilMoisture);
+  reportSoilMoisture(soil_moisture);
 
   float temperature, humidity;
   measureTemperatureAndHumidity(&temperature, &humidity);
@@ -356,6 +360,6 @@ void loop() {
 
   // Small delay to allow all reporting to finish.
   delay(TRANSMISSION_DELAY);
-
+  
   goToSleep();
 }
