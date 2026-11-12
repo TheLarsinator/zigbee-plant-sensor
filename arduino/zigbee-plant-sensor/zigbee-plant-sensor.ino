@@ -142,8 +142,8 @@ bool reportSoilMoistureAttribute(uint16_t attributeId)
     return false;
   }
 
-  // The stack defines minPresentValue, maxPresentValue and resolution without the REPORTING access
-  // flag, and esp_zb_zcl_report_attr_cmd_req() rejects those with ESP_ERR_NOT_SUPPORTED. Mark the
+  // The stack defines the metadata attributes without the REPORTING access flag, and
+  // esp_zb_zcl_report_attr_cmd_req() rejects those with ESP_ERR_NOT_SUPPORTED. Mark the
   // attribute reportable first.
   esp_zb_zcl_attr_t *attr = esp_zb_zcl_get_attribute(MOISTURE_SENSOR_ENDPOINT_NUMBER, ESP_ZB_ZCL_CLUSTER_ID_ANALOG_INPUT,
                                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, attributeId);
@@ -154,6 +154,36 @@ bool reportSoilMoistureAttribute(uint16_t attributeId)
     return false;
   }
   attr->access |= ESP_ZB_ZCL_ATTR_ACCESS_REPORTING;
+
+  // esp_zb_zcl_report_attr_cmd_req() asserts (esp_zigbee_zcl_command.c:263) when the attribute has
+  // no reporting info entry, so create one. Intervals of 0 mean the stack never reports it on its
+  // own; it is only sent by the explicit report below.
+  esp_zb_zcl_attr_location_info_t location = {};
+  location.endpoint_id = MOISTURE_SENSOR_ENDPOINT_NUMBER;
+  location.cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ANALOG_INPUT;
+  location.cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE;
+  location.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
+  location.attr_id = attributeId;
+  if (esp_zb_zcl_find_reporting_info(location) == nullptr)
+  {
+    esp_zb_zcl_reporting_info_t reporting_info;
+    memset(&reporting_info, 0, sizeof(reporting_info));
+    reporting_info.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV;
+    reporting_info.ep = MOISTURE_SENSOR_ENDPOINT_NUMBER;
+    reporting_info.cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ANALOG_INPUT;
+    reporting_info.cluster_role = ESP_ZB_ZCL_CLUSTER_SERVER_ROLE;
+    reporting_info.attr_id = attributeId;
+    reporting_info.dst.profile_id = ESP_ZB_AF_HA_PROFILE_ID;
+    reporting_info.manuf_code = ESP_ZB_ZCL_ATTR_NON_MANUFACTURER_SPECIFIC;
+
+    esp_err_t infoRet = esp_zb_zcl_update_reporting_info(&reporting_info);
+    if (infoRet != ESP_OK || esp_zb_zcl_find_reporting_info(location) == nullptr)
+    {
+      esp_zb_lock_release();
+      Serial.printf("Failed to set up reporting for analog input attribute 0x%04x: %s\n", attributeId, esp_err_to_name(infoRet));
+      return false;
+    }
+  }
 
   esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
   esp_zb_lock_release();
@@ -168,8 +198,9 @@ bool reportSoilMoistureAttribute(uint16_t attributeId)
 
 void reportSoilMoistureMetadata()
 {
-  // Description (0x001C) is not reported: it is a character string, and forcing it reportable makes
-  // esp_zb_zcl_report_attr_cmd_req() hit a stack assertion (esp_zigbee_zcl_command.c:263) and reboot.
+  // Description (0x001C) is not reported yet. It hit the same stack assertion as the others before
+  // they got a reporting info entry, but it is a character string, and whether the stack can report
+  // strings is untested. Re-enable it once the numeric attributes are confirmed to work.
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_APPLICATION_TYPE_ID);  // 0x0100
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MIN_PRESENT_VALUE_ID); // 0x0045
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MAX_PRESENT_VALUE_ID); // 0x0041
