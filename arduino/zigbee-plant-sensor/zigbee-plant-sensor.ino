@@ -31,11 +31,19 @@
 #define LIGHT_MEASUREMENT_TIMEOUT 500
 #define LIGHT_MEASUREMENT_POLL_DELAY 10
 
+#define CONNECT_TIMEOUT 10000
+
 #define SLOW_BOOTS 2
 
 float soil_moisture_lower_limit = 1050;
 float soil_moisture_upper_limit = 2650;
 float soil_moisture = 0;
+unsigned long soilPowerOnTime = 0;
+
+// Measured in setup(), before the radio is started, and reported in loop().
+float temperature = 0;
+float humidity = 0;
+int illuminance = -1;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 AHT20 aht20;
@@ -117,11 +125,21 @@ void reportBatteryPercentage(float batteryPercentage)
   zbTempSensor.reportBatteryPercentage();
 }
 
+void powerOnSoilSensor()
+{
+    digitalWrite(SOIL_POWER_PIN, HIGH);
+    soilPowerOnTime = millis();
+}
+
 float measureSoilMoisture()
 {
-    // Power the soil moisture sensor.
-    digitalWrite(SOIL_POWER_PIN, HIGH);
-    delay(SOIL_MOISTURE_POWER_DELAY); // Allow the sensor to stabilize.
+    // Wait for whatever is left of the stabilization time. The other sensors are read in the meantime,
+    // so this is usually shorter than SOIL_MOISTURE_POWER_DELAY.
+    unsigned long poweredFor = millis() - soilPowerOnTime;
+    if (poweredFor < SOIL_MOISTURE_POWER_DELAY)
+    {
+      delay(SOIL_MOISTURE_POWER_DELAY - poweredFor);
+    }
 
     // Measure 16 times and take the average.
     uint32_t moistureReadings = 0;
@@ -379,14 +397,23 @@ void startZigbee()
   esp_zb_cfg_t zigbeeConfig = ZIGBEE_DEFAULT_ED_CONFIG();
   zigbeeConfig.nwk_cfg.zed_cfg.keep_alive = 20000;
 
-  // When all EPs are registered, start Zigbee in End Device mode
+  // When all EPs are registered, start Zigbee in End Device mode. If the network can't be reached
+  // (coordinator down, out of range), go back to sleep and try again at the next wake-up instead of
+  // staying awake with the radio on.
   if (!Zigbee.begin(&zigbeeConfig, false)) {
-    Serial.println("Zigbee failed to start!");
-    Serial.println("Rebooting...");
-    ESP.restart();  // If Zigbee failed to start, reboot the device and try again
+    Serial.println("Zigbee failed to start, sleeping until the next wake-up.");
+    goToSleep();
   }
+  // Pairing takes longer, so allow more time on the first boots.
+  unsigned long connectTimeout = bootCount < SLOW_BOOTS ? PAIRING_DELAY : CONNECT_TIMEOUT;
+  unsigned long connectStart = millis();
   Serial.println("Connecting to network");
   while (!Zigbee.connected()) {
+    if (millis() - connectStart > connectTimeout) {
+      Serial.println();
+      Serial.println("Could not connect to the Zigbee network, sleeping until the next wake-up.");
+      goToSleep();
+    }
     Serial.print(".");
     delay(100);
   }
@@ -421,7 +448,11 @@ void setup() {
   pinMode(BATTERY_PIN, INPUT);
   pinMode(SOIL_POWER_PIN, OUTPUT);
 
-  // Connect to AHT30 sensor.
+  // Power the soil moisture sensor first and do the other measurements while it stabilizes, all
+  // before the radio is started. This keeps the awake time and the radio on-time short.
+  powerOnSoilSensor();
+
+  // Connect to the AHT20 and BH1750 sensors.
   Wire.begin();
   lightSensorDetected = light_sensor.begin();
   if (!lightSensorDetected) {
@@ -434,7 +465,10 @@ void setup() {
     Serial.println("AHT20 not detected. Please check wiring.");
   }
 
-  // We measure the soil moisture before we enable the radio. This saves SOIL_MOISTURE_POWER_DELAY ms of radio on-time. 
+  // The AHT20 takes ~80 ms per measurement and the BH1750 up to ~180 ms; both fit in the soil sensor's
+  // stabilization time.
+  measureTemperatureAndHumidity(&temperature, &humidity);
+  illuminance = measureIlluminance();
   soil_moisture = measureSoilMoisture();
 
   configureZigbeeStack();
@@ -480,13 +514,8 @@ void loop() {
     reportBatteryPercentage(batteryPercentage);
   }
 
-  int illuminance = measureIlluminance();
   reportIlluminance(illuminance);
-
   reportSoilMoisture(soil_moisture);
-
-  float temperature, humidity;
-  measureTemperatureAndHumidity(&temperature, &humidity);
   reportTemperatureAndHumidity(temperature, humidity);
 
   // Small delay to allow all reporting to finish.
