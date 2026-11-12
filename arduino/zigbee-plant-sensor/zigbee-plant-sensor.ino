@@ -31,6 +31,14 @@
 #define LIGHT_MEASUREMENT_TIMEOUT 500
 #define LIGHT_MEASUREMENT_POLL_DELAY 10
 
+// The BH1750 has two ranges. Fine: high-res mode 2 at the default MTreg (0.5 lx steps, saturates at
+// ~27,306 lx). Wide: high-res mode 1 at the minimum MTreg (~1.9 lx steps, up to ~121,000 lx).
+// The range is chosen from the previous reading, with hysteresis, and a fine reading at the ceiling
+// is repeated in the wide range.
+#define LIGHT_FINE_CEILING 27000
+#define LIGHT_SWITCH_TO_WIDE 20000
+#define LIGHT_SWITCH_TO_FINE 10000
+
 #define CONNECT_TIMEOUT 10000
 
 #define SLOW_BOOTS 2
@@ -85,6 +93,7 @@ ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
 RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR int lastBatteryPercentage = -10;
 RTC_DATA_ATTR int lastSoilMoisturePercentage = -10;
+RTC_DATA_ATTR bool lightWideRange = false;
 
 void blinkAndWait(int delayMillis, long speed)
 {
@@ -255,13 +264,15 @@ void reportSoilMoistureMetadata()
   delay(TRANSMISSION_DELAY);
 }
 
-int measureIlluminance()
+void startLightMeasurement(bool wideRange)
 {
-  if (!lightSensorDetected)
-  {
-    return -1;
-  }
+  // setMTreg() must come first: configure() starts the one-time measurement and its timer.
+  light_sensor.setMTreg(wideRange ? BH1750_MTREG_MIN : BH1750_DEFAULT_MTREG);
+  light_sensor.configure(wideRange ? BH1750::ONE_TIME_HIGH_RES_MODE : BH1750::ONE_TIME_HIGH_RES_MODE_2);
+}
 
+float readLightMeasurement()
+{
   int waitTime = 0;
   while (!light_sensor.measurementReady() && waitTime < LIGHT_MEASUREMENT_TIMEOUT)
   {
@@ -275,7 +286,44 @@ int measureIlluminance()
     return -1;
   }
 
-  return round(light_sensor.readLightLevel());
+  return light_sensor.readLightLevel();
+}
+
+int measureIlluminance()
+{
+  if (!lightSensorDetected)
+  {
+    return -1;
+  }
+
+  // The measurement was started in setup() in the range chosen from the previous wake-up.
+  float lux = readLightMeasurement();
+
+  // A fine-range reading at the ceiling means it got bright since the last wake-up: measure again
+  // in the wide range.
+  if (!lightWideRange && lux >= LIGHT_FINE_CEILING)
+  {
+    lightWideRange = true;
+    startLightMeasurement(true);
+    lux = readLightMeasurement();
+  }
+
+  if (lux < 0)
+  {
+    return -1;
+  }
+
+  // Pick the range for the next wake-up. The gap between the thresholds prevents flip-flopping.
+  if (lux > LIGHT_SWITCH_TO_WIDE)
+  {
+    lightWideRange = true;
+  }
+  else if (lux < LIGHT_SWITCH_TO_FINE)
+  {
+    lightWideRange = false;
+  }
+
+  return round(lux);
 }
 
 void reportIlluminance(int illuminance)
@@ -362,8 +410,9 @@ void configureZigbeeStack()
   // Add humidity cluster to the temperature sensor device with min, max and tolerance values
   zbTempSensor.addHumiditySensor(0, 100, 1);
 
-  // Set minimum and maximum for raw illuminance value (0 min and 50000 max equals to 0 lux - 100,000 lux)
-  zbIlluminanceSensor.setMinMaxValue(0, 50000);
+  // Set minimum and maximum for raw illuminance value (0 min and 51000 max equals to 0 lux - ~126,000 lux,
+  // covering the BH1750's wide range of ~121,000 lux)
+  zbIlluminanceSensor.setMinMaxValue(0, 51000);
 
   // Set tolerance for raw illuminance value
   zbIlluminanceSensor.setTolerance(1);
@@ -461,10 +510,11 @@ void setup() {
   // Connect to the AHT20 and BH1750 sensors.
   Wire.begin();
   lightSensorDetected = light_sensor.begin();
-  if (!lightSensorDetected) {
+  if (lightSensorDetected) {
+    startLightMeasurement(lightWideRange);
+  } else {
     Serial.println("BH1750 not detected. Please check wiring.");
   }
-  light_sensor.configure(BH1750::ONE_TIME_HIGH_RES_MODE_2);
 
   if (aht20.begin() == false)
   {
