@@ -123,6 +123,47 @@ void reportSoilMoisture(float soilMoisturePercentage)
   zbSoilMoistureSensor.reportAnalogInput();
 }
 
+bool reportSoilMoistureAttribute(uint16_t attributeId)
+{
+  // Modelled on ZigbeeAnalog::reportAnalogInput(), but for an arbitrary genAnalogInput attribute.
+  esp_zb_zcl_report_attr_cmd_t report_attr_cmd;
+  memset(&report_attr_cmd, 0, sizeof(report_attr_cmd));
+  report_attr_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_DST_ADDR_ENDP_NOT_PRESENT;
+  report_attr_cmd.attributeID = attributeId;
+  report_attr_cmd.direction = ESP_ZB_ZCL_CMD_DIRECTION_TO_CLI;
+  report_attr_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_ANALOG_INPUT;
+  report_attr_cmd.zcl_basic_cmd.src_endpoint = MOISTURE_SENSOR_ENDPOINT_NUMBER;
+  report_attr_cmd.manuf_specific = 0x00U;
+  report_attr_cmd.dis_default_resp = 0x00U;
+
+  if (!esp_zb_lock_acquire(portMAX_DELAY))
+  {
+    Serial.println("Failed to acquire Zigbee lock for attribute report.");
+    return false;
+  }
+  esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
+  esp_zb_lock_release();
+
+  if (ret != ESP_OK)
+  {
+    Serial.printf("Failed to report analog input attribute 0x%04x: %s\n", attributeId, esp_err_to_name(ret));
+    return false;
+  }
+  return true;
+}
+
+void reportSoilMoistureMetadata()
+{
+  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_DESCRIPTION_ID);       // 0x001C
+  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_APPLICATION_TYPE_ID);  // 0x0100
+  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MIN_PRESENT_VALUE_ID); // 0x0045
+  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MAX_PRESENT_VALUE_ID); // 0x0041
+  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_RESOLUTION_ID);        // 0x006A
+
+  // Small delay to allow the reports to be sent.
+  delay(TRANSMISSION_DELAY);
+}
+
 int measureIlluminance()
 {
   if (!lightSensorDetected)
@@ -238,6 +279,10 @@ void configureZigbeeStack()
 
   // Setup the analog device.
   zbSoilMoistureSensor.addAnalogInput();
+  zbSoilMoistureSensor.setAnalogInputDescription("Soil moisture");
+  zbSoilMoistureSensor.setAnalogInputApplication(0x04 << 16); // type 4 = percentage -> Z2M unit "%", skips engineeringUnits read
+  zbSoilMoistureSensor.setAnalogInputMinMax(0, 1000);         // value is reported as percent x 10
+  zbSoilMoistureSensor.setAnalogInputResolution(1);
   analogReadResolution(12);
 
   // Add endpoints to Zigbee Core
@@ -274,6 +319,14 @@ void startZigbee()
   zbTempSensor.setHumidityReporting(120,120,10);
   zbIlluminanceSensor.setReporting(120, 120, 10);
   zbSoilMoistureSensor.setAnalogInputReporting(120, 120, 10);
+
+  // Zigbee2MQTT reads the analog input metadata at startup, which times out for sleepy devices.
+  // Reporting it lets Z2M cache the values and skip those reads. Do this on the first boot after
+  // power-up and then roughly once a day (96 * 898 s).
+  if (bootCount == 1 || bootCount % 96 == 0)
+  {
+    reportSoilMoistureMetadata();
+  }
 }
 
 /********************* Arduino functions **************************/

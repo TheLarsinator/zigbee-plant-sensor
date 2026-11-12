@@ -21,7 +21,6 @@ const definition = {
             cluster: 'genAnalogInput',
             type: ['attributeReport', 'readResponse'],
             convert: (model, msg, publish, options, meta) => {
-                console.log("Hello");
                 const ep = msg.endpoint.ID;
                 if (!msg.data.hasOwnProperty('presentValue')) return;
 
