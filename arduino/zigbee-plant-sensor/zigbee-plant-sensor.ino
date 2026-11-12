@@ -31,11 +31,28 @@
 #define LIGHT_MEASUREMENT_TIMEOUT 500
 #define LIGHT_MEASUREMENT_POLL_DELAY 10
 
+// The BH1750 has two ranges. Fine: high-res mode 2 at the default MTreg (0.5 lx steps, saturates at
+// ~27,306 lx). Wide: high-res mode 1 at the minimum MTreg (~1.9 lx steps, up to ~121,000 lx).
+// The range is chosen from the previous reading, with hysteresis, and a fine reading at the ceiling
+// is repeated in the wide range.
+#define LIGHT_FINE_CEILING 27000
+#define LIGHT_SWITCH_TO_WIDE 20000
+#define LIGHT_SWITCH_TO_FINE 10000
+
+#define CONNECT_TIMEOUT 10000
+
 #define SLOW_BOOTS 2
 
 float soil_moisture_lower_limit = 1050;
 float soil_moisture_upper_limit = 2650;
 float soil_moisture = 0;
+unsigned long soilPowerOnTime = 0;
+
+// Measured in setup(), before the radio is started, and reported in loop().
+float temperature = 0;
+float humidity = 0;
+int illuminance = -1;
+int batteryPercentage = 0;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 AHT20 aht20;
@@ -76,6 +93,8 @@ ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
 RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR int lastBatteryPercentage = -10;
 RTC_DATA_ATTR int lastSoilMoisturePercentage = -10;
+RTC_DATA_ATTR bool lightWideRange = false;
+RTC_DATA_ATTR float filteredBatteryMilliVolts = 0; // 0 = no reading yet since power-up
 
 void blinkAndWait(int delayMillis, long speed)
 {
@@ -96,16 +115,37 @@ void goToSleep()
   esp_deep_sleep_start();
 }
 
+#define BATTERY_SAMPLES 64
+#define BATTERY_FILTER_FACTOR 8      // Each reading moves the average 1/8 of the way (~2 h at 15 min wake-ups)
+#define BATTERY_HYSTERESIS 0.75      // Percent the smoothed value must move before the reported value changes
+
 int measureBatteryPercentage()
 {
-  // Measure 16 times and take the average.
+  // Average many ADC samples. The divider halves the battery voltage, so multiply by 2.
   uint32_t batteryVoltages = 0;
-  for(int i = 0; i < 16; i++) {
+  for(int i = 0; i < BATTERY_SAMPLES; i++) {
     batteryVoltages += analogReadMilliVolts(BATTERY_PIN);
   }
-  float batteryVoltage = 2 * batteryVoltages / 16;
-  float batteryPercentage = getBatteryPercentage(batteryVoltage);
-  return roundPercentageDown(batteryPercentage, 1);
+  float batteryMilliVolts = 2.0f * batteryVoltages / BATTERY_SAMPLES;
+
+  // Smooth across wake-ups. One percent is only ~3 mV on the steep part of the curve, which is
+  // within the ADC noise, so unsmoothed readings flip between neighbouring percentages.
+  if (filteredBatteryMilliVolts <= 0)
+  {
+    filteredBatteryMilliVolts = batteryMilliVolts;
+  }
+  else
+  {
+    filteredBatteryMilliVolts += (batteryMilliVolts - filteredBatteryMilliVolts) / BATTERY_FILTER_FACTOR;
+  }
+  float batteryPercentage = getBatteryPercentage(round(filteredBatteryMilliVolts));
+
+  // Hysteresis: keep the last reported value unless the smoothed percentage has clearly moved away.
+  if (lastBatteryPercentage >= 0 && fabs(batteryPercentage - lastBatteryPercentage) <= BATTERY_HYSTERESIS)
+  {
+    return lastBatteryPercentage;
+  }
+  return round(batteryPercentage);
 }
 
 void reportBatteryPercentage(float batteryPercentage)
@@ -117,11 +157,21 @@ void reportBatteryPercentage(float batteryPercentage)
   zbTempSensor.reportBatteryPercentage();
 }
 
+void powerOnSoilSensor()
+{
+    digitalWrite(SOIL_POWER_PIN, HIGH);
+    soilPowerOnTime = millis();
+}
+
 float measureSoilMoisture()
 {
-    // Power the soil moisture sensor.
-    digitalWrite(SOIL_POWER_PIN, HIGH);
-    delay(SOIL_MOISTURE_POWER_DELAY); // Allow the sensor to stabilize.
+    // Wait for whatever is left of the stabilization time. The other sensors are read in the meantime,
+    // so this is usually shorter than SOIL_MOISTURE_POWER_DELAY.
+    unsigned long poweredFor = millis() - soilPowerOnTime;
+    if (poweredFor < SOIL_MOISTURE_POWER_DELAY)
+    {
+      delay(SOIL_MOISTURE_POWER_DELAY - poweredFor);
+    }
 
     // Measure 16 times and take the average.
     uint32_t moistureReadings = 0;
@@ -236,13 +286,15 @@ void reportSoilMoistureMetadata()
   delay(TRANSMISSION_DELAY);
 }
 
-int measureIlluminance()
+void startLightMeasurement(bool wideRange)
 {
-  if (!lightSensorDetected)
-  {
-    return -1;
-  }
+  // setMTreg() must come first: configure() starts the one-time measurement and its timer.
+  light_sensor.setMTreg(wideRange ? BH1750_MTREG_MIN : BH1750_DEFAULT_MTREG);
+  light_sensor.configure(wideRange ? BH1750::ONE_TIME_HIGH_RES_MODE : BH1750::ONE_TIME_HIGH_RES_MODE_2);
+}
 
+float readLightMeasurement()
+{
   int waitTime = 0;
   while (!light_sensor.measurementReady() && waitTime < LIGHT_MEASUREMENT_TIMEOUT)
   {
@@ -256,7 +308,44 @@ int measureIlluminance()
     return -1;
   }
 
-  return round(light_sensor.readLightLevel());
+  return light_sensor.readLightLevel();
+}
+
+int measureIlluminance()
+{
+  if (!lightSensorDetected)
+  {
+    return -1;
+  }
+
+  // The measurement was started in setup() in the range chosen from the previous wake-up.
+  float lux = readLightMeasurement();
+
+  // A fine-range reading at the ceiling means it got bright since the last wake-up: measure again
+  // in the wide range.
+  if (!lightWideRange && lux >= LIGHT_FINE_CEILING)
+  {
+    lightWideRange = true;
+    startLightMeasurement(true);
+    lux = readLightMeasurement();
+  }
+
+  if (lux < 0)
+  {
+    return -1;
+  }
+
+  // Pick the range for the next wake-up. The gap between the thresholds prevents flip-flopping.
+  if (lux > LIGHT_SWITCH_TO_WIDE)
+  {
+    lightWideRange = true;
+  }
+  else if (lux < LIGHT_SWITCH_TO_FINE)
+  {
+    lightWideRange = false;
+  }
+
+  return round(lux);
 }
 
 void reportIlluminance(int illuminance)
@@ -343,8 +432,9 @@ void configureZigbeeStack()
   // Add humidity cluster to the temperature sensor device with min, max and tolerance values
   zbTempSensor.addHumiditySensor(0, 100, 1);
 
-  // Set minimum and maximum for raw illuminance value (0 min and 50000 max equals to 0 lux - 100,000 lux)
-  zbIlluminanceSensor.setMinMaxValue(0, 50000);
+  // Set minimum and maximum for raw illuminance value (0 min and 51000 max equals to 0 lux - ~126,000 lux,
+  // covering the BH1750's wide range of ~121,000 lux)
+  zbIlluminanceSensor.setMinMaxValue(0, 51000);
 
   // Set tolerance for raw illuminance value
   zbIlluminanceSensor.setTolerance(1);
@@ -379,14 +469,23 @@ void startZigbee()
   esp_zb_cfg_t zigbeeConfig = ZIGBEE_DEFAULT_ED_CONFIG();
   zigbeeConfig.nwk_cfg.zed_cfg.keep_alive = 20000;
 
-  // When all EPs are registered, start Zigbee in End Device mode
+  // When all EPs are registered, start Zigbee in End Device mode. If the network can't be reached
+  // (coordinator down, out of range), go back to sleep and try again at the next wake-up instead of
+  // staying awake with the radio on.
   if (!Zigbee.begin(&zigbeeConfig, false)) {
-    Serial.println("Zigbee failed to start!");
-    Serial.println("Rebooting...");
-    ESP.restart();  // If Zigbee failed to start, reboot the device and try again
+    Serial.println("Zigbee failed to start, sleeping until the next wake-up.");
+    goToSleep();
   }
+  // Pairing takes longer, so allow more time on the first boots.
+  unsigned long connectTimeout = bootCount < SLOW_BOOTS ? PAIRING_DELAY : CONNECT_TIMEOUT;
+  unsigned long connectStart = millis();
   Serial.println("Connecting to network");
   while (!Zigbee.connected()) {
+    if (millis() - connectStart > connectTimeout) {
+      Serial.println();
+      Serial.println("Could not connect to the Zigbee network, sleeping until the next wake-up.");
+      goToSleep();
+    }
     Serial.print(".");
     delay(100);
   }
@@ -421,20 +520,33 @@ void setup() {
   pinMode(BATTERY_PIN, INPUT);
   pinMode(SOIL_POWER_PIN, OUTPUT);
 
-  // Connect to AHT30 sensor.
+  // Measure the battery first, while it is at rest: no radio and no soil sensor drawing current.
+  // Under load the voltage sags by an amount that varies per wake-up, which would make the
+  // percentage jitter and trigger extra battery reports.
+  batteryPercentage = measureBatteryPercentage();
+
+  // Then power the soil moisture sensor and do the other measurements while it stabilizes, all
+  // before the radio is started. This keeps the awake time and the radio on-time short.
+  powerOnSoilSensor();
+
+  // Connect to the AHT20 and BH1750 sensors.
   Wire.begin();
   lightSensorDetected = light_sensor.begin();
-  if (!lightSensorDetected) {
+  if (lightSensorDetected) {
+    startLightMeasurement(lightWideRange);
+  } else {
     Serial.println("BH1750 not detected. Please check wiring.");
   }
-  light_sensor.configure(BH1750::ONE_TIME_HIGH_RES_MODE_2);
 
   if (aht20.begin() == false)
   {
     Serial.println("AHT20 not detected. Please check wiring.");
   }
 
-  // We measure the soil moisture before we enable the radio. This saves SOIL_MOISTURE_POWER_DELAY ms of radio on-time. 
+  // The AHT20 takes ~80 ms per measurement and the BH1750 up to ~180 ms; both fit in the soil sensor's
+  // stabilization time.
+  measureTemperatureAndHumidity(&temperature, &humidity);
+  illuminance = measureIlluminance();
   soil_moisture = measureSoilMoisture();
 
   configureZigbeeStack();
@@ -472,21 +584,14 @@ void loop() {
     }
   }
 
-  int batteryPercentage = measureBatteryPercentage();
-
   if (batteryPercentage != lastBatteryPercentage)
   {
     lastBatteryPercentage = batteryPercentage;
     reportBatteryPercentage(batteryPercentage);
   }
 
-  int illuminance = measureIlluminance();
   reportIlluminance(illuminance);
-
   reportSoilMoisture(soil_moisture);
-
-  float temperature, humidity;
-  measureTemperatureAndHumidity(&temperature, &humidity);
   reportTemperatureAndHumidity(temperature, humidity);
 
   // Small delay to allow all reporting to finish.
