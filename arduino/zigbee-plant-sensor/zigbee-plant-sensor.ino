@@ -168,7 +168,8 @@ bool reportSoilMoistureAttribute(uint16_t attributeId)
 
 void reportSoilMoistureMetadata()
 {
-  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_DESCRIPTION_ID);       // 0x001C
+  // Description (0x001C) is not reported: it is a character string, and forcing it reportable makes
+  // esp_zb_zcl_report_attr_cmd_req() hit a stack assertion (esp_zigbee_zcl_command.c:263) and reboot.
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_APPLICATION_TYPE_ID);  // 0x0100
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MIN_PRESENT_VALUE_ID); // 0x0045
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MAX_PRESENT_VALUE_ID); // 0x0041
