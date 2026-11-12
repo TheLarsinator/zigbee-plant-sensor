@@ -44,7 +44,33 @@ ZigbeeIlluminanceSensor zbIlluminanceSensor = ZigbeeIlluminanceSensor(ZIGBEE_ILL
 BH1750 light_sensor;
 bool lightSensorDetected = false;
 
-ZigbeeAnalog zbSoilMoistureSensor = ZigbeeAnalog(MOISTURE_SENSOR_ENDPOINT_NUMBER);
+// ZigbeeAnalog with access to its cluster list, so attributes can be marked reportable before the
+// endpoint is registered. The stack sizes each endpoint's reporting table at registration from the
+// attributes that are reportable at that point, so adding reporting info afterwards fails with
+// ESP_ERR_NO_MEM.
+class SoilMoistureAnalog : public ZigbeeAnalog
+{
+public:
+  using ZigbeeAnalog::ZigbeeAnalog;
+
+  bool setAnalogInputAttributeReportable(uint16_t attributeId)
+  {
+    esp_zb_attribute_list_t *attr =
+      esp_zb_cluster_list_get_cluster(_cluster_list, ESP_ZB_ZCL_CLUSTER_ID_ANALOG_INPUT, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+    for (; attr != nullptr; attr = attr->next)
+    {
+      if (attr->attribute.id == attributeId)
+      {
+        attr->attribute.access |= ESP_ZB_ZCL_ATTR_ACCESS_REPORTING;
+        return true;
+      }
+    }
+    Serial.printf("Analog input attribute 0x%04x not found in cluster list.\n", attributeId);
+    return false;
+  }
+};
+
+SoilMoistureAnalog zbSoilMoistureSensor = SoilMoistureAnalog(MOISTURE_SENSOR_ENDPOINT_NUMBER);
 ZigbeeAnalog zbBatteryVoltage = ZigbeeAnalog(BATTERY_VOLTAGE_ENDPOINT_NUMBER);
 
 RTC_DATA_ATTR int bootCount = 0;
@@ -329,6 +355,11 @@ void configureZigbeeStack()
   zbSoilMoistureSensor.setAnalogInputApplication(0x04 << 16); // type 4 = percentage -> Z2M unit "%", skips engineeringUnits read
   zbSoilMoistureSensor.setAnalogInputMinMax(0, 1000);         // value is reported as percent x 10
   zbSoilMoistureSensor.setAnalogInputResolution(1);
+  // Must happen before Zigbee.begin() so the stack reserves reporting slots for these attributes.
+  zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_APPLICATION_TYPE_ID);
+  zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MIN_PRESENT_VALUE_ID);
+  zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MAX_PRESENT_VALUE_ID);
+  zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_RESOLUTION_ID);
   analogReadResolution(12);
 
   // Add endpoints to Zigbee Core
