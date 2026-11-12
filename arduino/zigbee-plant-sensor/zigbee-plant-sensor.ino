@@ -44,6 +44,7 @@ unsigned long soilPowerOnTime = 0;
 float temperature = 0;
 float humidity = 0;
 int illuminance = -1;
+int batteryPercentage = 0;
 
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(TEMP_SENSOR_ENDPOINT_NUMBER);
 AHT20 aht20;
@@ -448,7 +449,12 @@ void setup() {
   pinMode(BATTERY_PIN, INPUT);
   pinMode(SOIL_POWER_PIN, OUTPUT);
 
-  // Power the soil moisture sensor first and do the other measurements while it stabilizes, all
+  // Measure the battery first, while it is at rest: no radio and no soil sensor drawing current.
+  // Under load the voltage sags by an amount that varies per wake-up, which would make the
+  // percentage jitter and trigger extra battery reports.
+  batteryPercentage = measureBatteryPercentage();
+
+  // Then power the soil moisture sensor and do the other measurements while it stabilizes, all
   // before the radio is started. This keeps the awake time and the radio on-time short.
   powerOnSoilSensor();
 
@@ -505,8 +511,6 @@ void loop() {
       digitalWrite(LED_BUILTIN, HIGH);
     }
   }
-
-  int batteryPercentage = measureBatteryPercentage();
 
   if (batteryPercentage != lastBatteryPercentage)
   {
