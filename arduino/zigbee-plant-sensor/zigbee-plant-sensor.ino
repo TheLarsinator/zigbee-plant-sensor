@@ -141,6 +141,20 @@ bool reportSoilMoistureAttribute(uint16_t attributeId)
     Serial.println("Failed to acquire Zigbee lock for attribute report.");
     return false;
   }
+
+  // The stack defines minPresentValue, maxPresentValue and resolution without the REPORTING access
+  // flag, and esp_zb_zcl_report_attr_cmd_req() rejects those with ESP_ERR_NOT_SUPPORTED. Mark the
+  // attribute reportable first.
+  esp_zb_zcl_attr_t *attr = esp_zb_zcl_get_attribute(MOISTURE_SENSOR_ENDPOINT_NUMBER, ESP_ZB_ZCL_CLUSTER_ID_ANALOG_INPUT,
+                                                     ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, attributeId);
+  if (attr == nullptr)
+  {
+    esp_zb_lock_release();
+    Serial.printf("Analog input attribute 0x%04x not found.\n", attributeId);
+    return false;
+  }
+  attr->access |= ESP_ZB_ZCL_ATTR_ACCESS_REPORTING;
+
   esp_err_t ret = esp_zb_zcl_report_attr_cmd_req(&report_attr_cmd);
   esp_zb_lock_release();
 
