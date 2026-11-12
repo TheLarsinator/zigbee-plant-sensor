@@ -224,13 +224,13 @@ bool reportSoilMoistureAttribute(uint16_t attributeId)
 
 void reportSoilMoistureMetadata()
 {
-  // Description (0x001C) is not reported yet. It hit the same stack assertion as the others before
-  // they got a reporting info entry, but it is a character string, and whether the stack can report
-  // strings is untested. Re-enable it once the numeric attributes are confirmed to work.
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_APPLICATION_TYPE_ID);  // 0x0100
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MIN_PRESENT_VALUE_ID); // 0x0045
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MAX_PRESENT_VALUE_ID); // 0x0041
   reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_RESOLUTION_ID);        // 0x006A
+  // Description is a character string; it is reported last so the numeric attributes are already
+  // out if the stack turns out not to handle reporting it.
+  reportSoilMoistureAttribute(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_DESCRIPTION_ID);       // 0x001C
 
   // Small delay to allow the reports to be sent.
   delay(TRANSMISSION_DELAY);
@@ -356,6 +356,7 @@ void configureZigbeeStack()
   zbSoilMoistureSensor.setAnalogInputMinMax(0, 1000);         // value is reported as percent x 10
   zbSoilMoistureSensor.setAnalogInputResolution(1);
   // Must happen before Zigbee.begin() so the stack reserves reporting slots for these attributes.
+  zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_DESCRIPTION_ID);
   zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_APPLICATION_TYPE_ID);
   zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MIN_PRESENT_VALUE_ID);
   zbSoilMoistureSensor.setAnalogInputAttributeReportable(ESP_ZB_ZCL_ATTR_ANALOG_INPUT_MAX_PRESENT_VALUE_ID);
