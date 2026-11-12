@@ -94,6 +94,7 @@ RTC_DATA_ATTR int bootCount = 0;
 RTC_DATA_ATTR int lastBatteryPercentage = -10;
 RTC_DATA_ATTR int lastSoilMoisturePercentage = -10;
 RTC_DATA_ATTR bool lightWideRange = false;
+RTC_DATA_ATTR float filteredBatteryMilliVolts = 0; // 0 = no reading yet since power-up
 
 void blinkAndWait(int delayMillis, long speed)
 {
@@ -114,16 +115,37 @@ void goToSleep()
   esp_deep_sleep_start();
 }
 
+#define BATTERY_SAMPLES 64
+#define BATTERY_FILTER_FACTOR 8      // Each reading moves the average 1/8 of the way (~2 h at 15 min wake-ups)
+#define BATTERY_HYSTERESIS 0.75      // Percent the smoothed value must move before the reported value changes
+
 int measureBatteryPercentage()
 {
-  // Measure 16 times and take the average.
+  // Average many ADC samples. The divider halves the battery voltage, so multiply by 2.
   uint32_t batteryVoltages = 0;
-  for(int i = 0; i < 16; i++) {
+  for(int i = 0; i < BATTERY_SAMPLES; i++) {
     batteryVoltages += analogReadMilliVolts(BATTERY_PIN);
   }
-  float batteryVoltage = 2 * batteryVoltages / 16;
-  float batteryPercentage = getBatteryPercentage(batteryVoltage);
-  return roundPercentageDown(batteryPercentage, 1);
+  float batteryMilliVolts = 2.0f * batteryVoltages / BATTERY_SAMPLES;
+
+  // Smooth across wake-ups. One percent is only ~3 mV on the steep part of the curve, which is
+  // within the ADC noise, so unsmoothed readings flip between neighbouring percentages.
+  if (filteredBatteryMilliVolts <= 0)
+  {
+    filteredBatteryMilliVolts = batteryMilliVolts;
+  }
+  else
+  {
+    filteredBatteryMilliVolts += (batteryMilliVolts - filteredBatteryMilliVolts) / BATTERY_FILTER_FACTOR;
+  }
+  float batteryPercentage = getBatteryPercentage(round(filteredBatteryMilliVolts));
+
+  // Hysteresis: keep the last reported value unless the smoothed percentage has clearly moved away.
+  if (lastBatteryPercentage >= 0 && fabs(batteryPercentage - lastBatteryPercentage) <= BATTERY_HYSTERESIS)
+  {
+    return lastBatteryPercentage;
+  }
+  return round(batteryPercentage);
 }
 
 void reportBatteryPercentage(float batteryPercentage)
